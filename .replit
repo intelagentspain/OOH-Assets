@@ -1,0 +1,96 @@
+modules = ["nodejs-24", "python-3.11", "postgresql-16"]
+
+[deployment]
+router = "application"
+deploymentTarget = "autoscale"
+
+[deployment.postBuild]
+args = ["pnpm", "store", "prune"]
+env = { "CI" = "true" }
+
+[workflows]
+runButton = "Project"
+
+[agent]
+stack = "PNPM_WORKSPACE"
+expertMode = true
+integrations = ["resend:1.0.0"]
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 20000
+
+[[ports]]
+localPort = 8080
+externalPort = 8080
+
+[[ports]]
+localPort = 8081
+externalPort = 8081
+
+[[ports]]
+localPort = 8082
+externalPort = 3002
+
+[[ports]]
+localPort = 8083
+externalPort = 4200
+
+[[ports]]
+localPort = 8084
+externalPort = 5173
+
+[[ports]]
+localPort = 8085
+externalPort = 6000
+
+[[ports]]
+localPort = 8086
+externalPort = 8008
+
+[[ports]]
+localPort = 8087
+externalPort = 6800
+
+[[ports]]
+localPort = 26184
+externalPort = 80
+
+[[ports]]
+localPort = 26185
+externalPort = 3001
+
+[[ports]]
+localPort = 26186
+externalPort = 3003
+
+[[ports]]
+localPort = 26187
+externalPort = 5000
+
+[[ports]]
+localPort = 26188
+externalPort = 3000
+
+[[ports]]
+localPort = 26189
+externalPort = 8000
+
+[[ports]]
+localPort = 26190
+externalPort = 8099
+
+[[ports]]
+localPort = 26191
+externalPort = 9000
+
+[userenv]
+
+[userenv.shared]
+VAPID_PUBLIC_KEY = "BFVhadTR5zn7-j1kVg316xS4BtuH_X_hMZnthjrBu5iKhRbVtytbh3B3fP2gOp_tDeOG5HmpQSdJ61ZkSlNyVpU"
+VAPID_PRIVATE_KEY = "XUlmjPHc2mli0FbfBjqlIJfDCN8aNp5xAk9ohcHNAK8"
+VAPID_CONTACT_EMAIL = "ops@imdaad.ae"
+VITE_ELEVENLABS_AGENT_ID = "agent_3701knza94s4edwrv16hyfzdmdt3"
+
+[nix]
+channel = "stable-25_05"
