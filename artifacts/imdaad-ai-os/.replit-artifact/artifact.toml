@@ -1,0 +1,40 @@
+kind = "web"
+previewPath = "/"
+title = "AI-OS"
+version = "1.0.0"
+id = "artifacts/imdaad-ai-os"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 26184
+
+[services.development]
+run = "pnpm --filter @workspace/imdaad-ai-os run dev"
+
+[services.env]
+PORT = "26184"
+BASE_PATH = "/"
+
+[services.production]
+
+[services.production.build]
+args = ["sh", "-c", "pnpm install --frozen-lockfile && pnpm --filter @workspace/imdaad-ai-os run build"]
+
+[services.production.build.env]
+NODE_ENV = "production"
+PORT = "26184"
+BASE_PATH = "/"
+
+[services.production.run]
+args = ["pnpm", "--filter", "@workspace/imdaad-ai-os", "run", "serve"]
+
+[services.production.run.env]
+PORT = "26184"
+BASE_PATH = "/"
+NODE_ENV = "production"
