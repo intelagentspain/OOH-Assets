@@ -1,0 +1,6488 @@
+import { useRef, useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  TrendingUp, TrendingDown, Minus, ArrowLeft, ShieldCheck,
+  AlertTriangle, Brain, Target, DollarSign, BarChart3,
+  CheckCircle, XCircle, FileWarning, Zap, ChevronRight,
+  Users, Building2, Star, Sparkles, Lightbulb, ListChecks, Activity, X,
+  Plus, Mic, Send, MessageSquare, UploadCloud, FileText, Wand2, Trash2, Download,
+} from 'lucide-react';
+import {
+  computeVendorScore,
+  classifyVendorRisk,
+  type VendorIntelData,
+  type VendorRiskLevel,
+  type VendorTrend,
+} from '@/data/mockData';
+import { buildDefaultVendor, useVendors } from '@/context/VendorsContext';
+import type { ToastFn } from '@/lib/ui';
+import { parseProjectDocumentFile } from '@/modules/projectcommand/data/projectDocumentParser';
+import {
+  useProjectCommandProjectOptions,
+  useProjectCommandPropertyOptions,
+  useSelectedProjectCommandData,
+} from '@/modules/projectcommand/useProjectCommandData';
+
+type FilterTab = 'copilot' | 'all' | 'top' | 'atrisk' | 'cost';
+
+type VendorWizardStep = 1 | 2 | 3 | 4;
+type VendorSetupMode = 'manual' | 'ai';
+type VendorCreateSource = 'manual' | 'ai';
+
+type VendorWizardForm = {
+  name: string;
+  category: string;
+  sites: string;
+  address: string;
+  city: string;
+  country: string;
+  pocName: string;
+  pocTitle: string;
+  pocPhone: string;
+  pocEmail: string;
+  activeContracts: string;
+  contractExpiry: string;
+  slaCompliance: string;
+  firstTimeFixRate: string;
+  avgResolutionMin: string;
+  evidenceCompliance: string;
+  repeatFailureRate: string;
+  jobsLast30d: string;
+  avgCostPerJob: string;
+  trend: VendorTrend;
+  dependencyRisk: 'Low' | 'Medium' | 'High' | 'Critical';
+  dependencyNote: string;
+  predictedRisk30d: string;
+  contractFlags: string;
+};
+
+type VendorSetupDocument = {
+  id: string;
+  name: string;
+  type: string;
+  sizeLabel: string;
+  content: string;
+  warning?: string;
+};
+
+type VendorAiExtraction = {
+  label: string;
+  value: string;
+  source: string;
+};
+
+type QuoteExtractionStatus = 'Read' | 'Missing price' | 'Missing SLA' | 'Missing delivery' | 'Needs clarification' | 'Unsupported / no text';
+type QuoteWorkbenchStep = 'context' | 'upload' | 'comparison';
+
+type ProcurementAssignmentContext = {
+  propertyId: string;
+  propertyName: string;
+  projectId: string;
+  projectName: string;
+  packageName: string;
+  budgetAllowance: number;
+  requiredDeliveryDate: string;
+  evaluationCriteria: string[];
+  evidenceRequirements: string[];
+};
+
+type QuoteAnalysisItem = {
+  id: string;
+  vendorName: string;
+  amount: number | null;
+  sla: number | null;
+  deliveryDate: string | null;
+  warranty: string;
+  exclusions: string;
+  extractionStatus: QuoteExtractionStatus;
+  missingFields: string[];
+  clarificationQuestions: string[];
+  commercialDelta: number | null;
+  recommendationReason: string;
+  nextActions: string[];
+  score: number;
+  risk: 'Low' | 'Medium' | 'High';
+  finding: string;
+};
+
+type QuoteAnalysis = {
+  assignment: ProcurementAssignmentContext;
+  winner: QuoteAnalysisItem;
+  items: QuoteAnalysisItem[];
+  summary: string;
+  savings: number;
+  findings: string[];
+  commercialSpread: number | null;
+  riskConditions: string[];
+  clarificationQuestions: string[];
+  nextActions: string[];
+};
+
+type QuoteActionArtifact = {
+  title: string;
+  status: string;
+  body: string;
+  lines: string[];
+};
+
+type RfqCreationMode = 'tell' | 'template' | 'docs';
+type RfqWizardStep = 'project' | 'mode' | 'scope' | 'requirements' | 'scoring' | 'review';
+type RfqScoringKey = 'price' | 'sla' | 'quality' | 'compliance' | 'capacity' | 'risk';
+
+type RfqTemplate = {
+  id: string;
+  label: string;
+  category: string;
+  serviceDefaults: string[];
+  requirementDefaults: string[];
+  mandatoryDocuments: string[];
+  scoringDefaults: Record<RfqScoringKey, number>;
+};
+
+type RfqAnchor = {
+  propertyId: string;
+  propertyName: string;
+  propertyMeta: string;
+  projectId: string;
+  projectName: string;
+  projectType: string;
+  serviceCategory: string;
+  sitesAreas: string;
+  targetStartDate: string;
+  contractPeriod: string;
+  currentVendor: string;
+  shortlistContext: string;
+};
+
+type RfqWizardState = {
+  step: RfqWizardStep;
+  mode: RfqCreationMode | null;
+  anchor: RfqAnchor;
+  templateId: string;
+  aiBrief: string;
+  documents: VendorSetupDocument[];
+  pastedScope: string;
+  services: string;
+  inclusions: string;
+  exclusions: string;
+  volume: string;
+  timeline: string;
+  sla: string;
+  evidence: string;
+  compliance: string;
+  licenses: string;
+  insurance: string;
+  hse: string;
+  mobilisation: string;
+  scoring: Record<RfqScoringKey, string>;
+};
+
+type RfqGeneratedPackage = {
+  title: string;
+  status: string;
+  summary: string;
+  contextLines: string[];
+  scopeLines: string[];
+  responseFields: string[];
+  mandatoryDocuments: string[];
+  slaEvidence: string[];
+  commercialTable: string[];
+  scoringMatrix: { label: string; weight: number }[];
+  submissionRules: string[];
+  actions: string[];
+};
+
+type RfqPackageLineField = 'contextLines' | 'scopeLines' | 'responseFields' | 'mandatoryDocuments' | 'slaEvidence' | 'commercialTable' | 'submissionRules';
+
+const vendorCategories = [
+  'FM & HVAC',
+  'FM & Electrical',
+  'MEP & Systems',
+  'Cleaning & Soft FM',
+  'Security',
+  'Landscaping',
+  'Fire & Safety',
+  'Elevators & Lifts',
+  'Engineering & Civil',
+  'General FM',
+];
+
+const procurementPackageTemplates = [
+  {
+    name: 'Facade Systems',
+    budgetAllowance: 58_000_000,
+    requiredDeliveryDate: '2026-08-15',
+    evaluationCriteria: ['Cost', 'Delivery', 'Warranty', 'Exclusions', 'Evidence', 'Compliance'],
+    evidenceRequirements: ['Shop drawings', 'Material certificates', 'Inspection test plan', 'Warranty pack', 'Authority-ready submittals'],
+  },
+  {
+    name: 'MEP',
+    budgetAllowance: 86_000_000,
+    requiredDeliveryDate: '2026-09-20',
+    evaluationCriteria: ['Cost', 'Delivery', 'Coordination risk', 'Warranty', 'Evidence', 'Compliance'],
+    evidenceRequirements: ['Method statement', 'Testing certificates', 'Commissioning plan', 'As-built pack', 'Warranty pack'],
+  },
+  {
+    name: 'Elevators',
+    budgetAllowance: 34_000_000,
+    requiredDeliveryDate: '2026-10-05',
+    evaluationCriteria: ['Cost', 'Lead time', 'Warranty', 'Authority sign-off readiness', 'Evidence', 'Maintenance support'],
+    evidenceRequirements: ['Lift inspection plan', 'Factory certificates', 'Warranty pack', 'Maintenance proposal', 'Authority sign-off evidence'],
+  },
+  {
+    name: 'Fire Systems',
+    budgetAllowance: 22_000_000,
+    requiredDeliveryDate: '2026-09-10',
+    evaluationCriteria: ['Cost', 'Civil defence readiness', 'Warranty', 'Exclusions', 'Evidence', 'Compliance'],
+    evidenceRequirements: ['Civil defence submittals', 'Testing certificates', 'Commissioning report', 'Warranty pack', 'Inspection evidence'],
+  },
+  {
+    name: 'Fit-out',
+    budgetAllowance: 72_000_000,
+    requiredDeliveryDate: '2026-11-01',
+    evaluationCriteria: ['Cost', 'Delivery', 'Mockup readiness', 'Warranty', 'Exclusions', 'Evidence'],
+    evidenceRequirements: ['Material approvals', 'Mockup sign-off', 'Inspection reports', 'Snag closure evidence', 'Warranty pack'],
+  },
+  {
+    name: 'Custom package',
+    budgetAllowance: 10_000_000,
+    requiredDeliveryDate: '2026-09-30',
+    evaluationCriteria: ['Cost', 'Delivery', 'Warranty', 'Exclusions', 'Evidence', 'Compliance'],
+    evidenceRequirements: ['Commercial offer', 'Programme commitment', 'Warranty statement', 'Evidence pack', 'Compliance declaration'],
+  },
+];
+
+const rfqStepOrder: RfqWizardStep[] = ['project', 'mode', 'scope', 'requirements', 'scoring', 'review'];
+const rfqScoringLabels: Record<RfqScoringKey, string> = {
+  price: 'Price',
+  sla: 'SLA',
+  quality: 'Quality',
+  compliance: 'Compliance',
+  capacity: 'Capacity',
+  risk: 'Risk',
+};
+
+const rfqScoringKeysByLabel = Object.fromEntries(
+  Object.entries(rfqScoringLabels).map(([key, label]) => [label, key]),
+) as Record<string, RfqScoringKey>;
+
+function buildRfqTemplates(): RfqTemplate[] {
+  return [
+    {
+      id: 'fm-hvac',
+      label: 'FM / HVAC Services',
+      category: 'FM & HVAC',
+      serviceDefaults: ['Chiller, AHU, FCU, and split-unit PPM', 'Reactive cooling fault attendance', 'Filter, coil, drain, and condensate checks', 'Cooling performance and temperature reporting'],
+      requirementDefaults: ['P1 cooling fault response and rectification SLA', 'Technician HVAC certification evidence', 'Asset-level PPM and close-out evidence'],
+      mandatoryDocuments: ['Trade licence', 'Public liability insurance', 'Technician certifications', 'HSE plan', 'Comparable client references'],
+      scoringDefaults: { price: 25, sla: 20, quality: 20, compliance: 15, capacity: 10, risk: 10 },
+    },
+    {
+      id: 'fm-electrical',
+      label: 'FM / Electrical Services',
+      category: 'FM & Electrical',
+      serviceDefaults: ['LV panel and DB inspection', 'Lighting, small power, and emergency lighting repairs', 'Thermography and load balance checks', 'Electrical incident response and isolation support'],
+      requirementDefaults: ['Emergency electrical response SLA', 'Licensed electrician allocation', 'Panel inspection and test evidence'],
+      mandatoryDocuments: ['Trade licence', 'Public liability insurance', 'Electrical technician licences', 'HSE plan', 'Testing equipment calibration certificates'],
+      scoringDefaults: { price: 23, sla: 20, quality: 20, compliance: 17, capacity: 10, risk: 10 },
+    },
+    {
+      id: 'cleaning-soft-fm',
+      label: 'Cleaning & Soft FM',
+      category: 'Cleaning & Soft FM',
+      serviceDefaults: ['Daily cleaning routines', 'Deep cleaning schedule', 'Waste handling coordination', 'Supervisor inspection rounds'],
+      requirementDefaults: ['Shift coverage plan', 'Consumables responsibility', 'Inspection checklist evidence'],
+      mandatoryDocuments: ['Trade licence', 'Insurance certificates', 'Staff deployment plan', 'Chemical MSDS sheets', 'HSE plan'],
+      scoringDefaults: { price: 28, sla: 16, quality: 22, compliance: 14, capacity: 12, risk: 8 },
+    },
+    {
+      id: 'mep-systems',
+      label: 'MEP & Systems',
+      category: 'MEP & Systems',
+      serviceDefaults: ['Mechanical, electrical, and plumbing planned maintenance', 'Corrective works for MEP defects', 'Testing, commissioning, and recommissioning support', 'Specialist escalation for critical systems'],
+      requirementDefaults: ['Method statements by discipline', 'Testing and commissioning certificates', 'Close-out packs for completed works'],
+      mandatoryDocuments: ['Trade licence', 'Insurance certificates', 'Engineer credentials', 'Method statement', 'Testing certificate examples'],
+      scoringDefaults: { price: 22, sla: 18, quality: 22, compliance: 16, capacity: 12, risk: 10 },
+    },
+    {
+      id: 'fire-safety',
+      label: 'Fire & Safety',
+      category: 'Fire & Safety',
+      serviceDefaults: ['Fire alarm and life-safety system inspection', 'Fire pump, sprinkler, and extinguisher maintenance', 'Civil defence readiness support', 'Testing, corrective actions, and impairment reporting'],
+      requirementDefaults: ['Authority compliance evidence', 'Testing records by system', 'Certified technician allocation'],
+      mandatoryDocuments: ['Trade licence', 'Civil defence approvals', 'Insurance certificates', 'Technician certifications', 'Testing records'],
+      scoringDefaults: { price: 18, sla: 18, quality: 20, compliance: 24, capacity: 10, risk: 10 },
+    },
+    {
+      id: 'security',
+      label: 'Security Services',
+      category: 'Security',
+      serviceDefaults: ['Guarding coverage by post and shift', 'Access control and visitor management support', 'Incident reporting and escalation', 'Supervisor patrols and handover logs'],
+      requirementDefaults: ['Post orders by location', 'Guard licence compliance', 'Incident escalation matrix'],
+      mandatoryDocuments: ['Security licence', 'Insurance certificates', 'Guard licence evidence', 'Supervisor CVs', 'Incident report format'],
+      scoringDefaults: { price: 24, sla: 16, quality: 18, compliance: 20, capacity: 12, risk: 10 },
+    },
+    {
+      id: 'landscape-soft-fm',
+      label: 'Landscape / Soft FM',
+      category: 'Landscaping',
+      serviceDefaults: ['Lawn, shrub, palm, and planter maintenance', 'Irrigation controller, valve, and leak checks', 'Seasonal planting and soil treatment support', 'Pest, plant health, and landscape defect escalation'],
+      requirementDefaults: ['Monthly landscape service calendar', 'Irrigation leak and outage response SLA', 'Plant replacement and material approval rules'],
+      mandatoryDocuments: ['Trade licence', 'Insurance certificates', 'HSE plan', 'Resource plan', 'Comparable community references'],
+      scoringDefaults: { price: 26, sla: 16, quality: 22, compliance: 12, capacity: 14, risk: 10 },
+    },
+    {
+      id: 'elevators-lifts',
+      label: 'Elevators & Lifts',
+      category: 'Elevators & Lifts',
+      serviceDefaults: ['Passenger and service lift PPM', 'Breakdown attendance and passenger release support', 'Safety gear, door, and controller inspections', 'Authority inspection and certification support'],
+      requirementDefaults: ['Passenger entrapment response SLA', 'OEM or approved specialist technician evidence', 'Monthly lift inspection and safety report'],
+      mandatoryDocuments: ['Trade licence', 'Lift maintenance approval', 'Insurance certificates', 'Technician certifications', 'Authority inspection evidence'],
+      scoringDefaults: { price: 20, sla: 22, quality: 20, compliance: 20, capacity: 8, risk: 10 },
+    },
+    {
+      id: 'engineering-civil',
+      label: 'Engineering & Civil',
+      category: 'Engineering & Civil',
+      serviceDefaults: ['Civil repair and minor works', 'Waterproofing, facade, and structural defect support', 'Masonry, tiling, and finishing repairs', 'Inspection reports and method statements'],
+      requirementDefaults: ['Method statement and risk assessment for each work package', 'Engineer supervision and QA sign-off', 'Defect photo evidence before and after completion'],
+      mandatoryDocuments: ['Trade licence', 'Insurance certificates', 'Engineer credentials', 'HSE plan', 'Comparable civil works references'],
+      scoringDefaults: { price: 24, sla: 14, quality: 24, compliance: 14, capacity: 14, risk: 10 },
+    },
+    {
+      id: 'general-sourcing',
+      label: 'General Vendor Sourcing',
+      category: 'General FM',
+      serviceDefaults: ['Defined service scope', 'Mobilisation plan', 'Reporting and governance cadence', 'Operational escalation route'],
+      requirementDefaults: ['Clear SLA commitments', 'Evidence pack for completed work', 'Commercial validity period'],
+      mandatoryDocuments: ['Trade licence', 'Insurance certificates', 'Company profile', 'Reference projects', 'HSE declaration'],
+      scoringDefaults: { price: 25, sla: 15, quality: 20, compliance: 15, capacity: 15, risk: 10 },
+    },
+  ];
+}
+
+function defaultRfqScoring(): Record<RfqScoringKey, string> {
+  return { price: '25', sla: '20', quality: '20', compliance: '15', capacity: '10', risk: '10' };
+}
+
+function relevantRfqTemplates(templates: RfqTemplate[], serviceCategory: string): RfqTemplate[] {
+  const category = serviceCategory.trim().toLowerCase();
+  const exactMatches = templates.filter(template => template.category.trim().toLowerCase() === category);
+  if (exactMatches.length > 0) return exactMatches;
+  return templates.filter(template => template.category === 'General FM');
+}
+
+function splitRfqLines(value: string): string[] {
+  return value
+    .split(/\n|;|\u2022|-/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function splitEditableRfqLines(value: string): string[] {
+  return value
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+}
+
+function extractRfqScopeFromDocuments(documents: VendorSetupDocument[], notes: string) {
+  const combined = [notes, ...documents.map(doc => `${doc.name}\n${doc.content}`)].filter(Boolean).join('\n');
+  if (!combined.trim()) return {};
+  const sentenceFallback = combined
+    .replace(/\s+/g, ' ')
+    .split(/(?<=[.!?])\s+/)
+    .filter(sentence => sentence.length > 24)
+    .slice(0, 4)
+    .join(' ');
+  return {
+    services: extractLabeledValue(combined, ['scope of services', 'service scope', 'scope', 'services required', 'work scope']) || sentenceFallback,
+    inclusions: extractLabeledValue(combined, ['inclusions', 'included services', 'included scope']),
+    exclusions: extractLabeledValue(combined, ['exclusions', 'excluded services', 'out of scope']),
+    volume: extractLabeledValue(combined, ['volume', 'quantities', 'boq summary', 'asset count', 'units']),
+    timeline: extractLabeledValue(combined, ['timeline', 'programme', 'duration', 'start date', 'delivery date']),
+    sla: extractLabeledValue(combined, ['sla', 'service level', 'response time', 'rectification time']),
+    evidence: extractLabeledValue(combined, ['evidence', 'reporting', 'close out', 'completion evidence']),
+    compliance: extractLabeledValue(combined, ['compliance', 'regulatory', 'authority requirements']),
+  };
+}
+
+function buildInitialRfqState(focusVendor: VendorIntelData, selectedProject: ReturnType<typeof useSelectedProjectCommandData>): RfqWizardState {
+  return {
+    step: 'project',
+    mode: null,
+    anchor: {
+      propertyId: selectedProject.property.id,
+      propertyName: selectedProject.property.name,
+      propertyMeta: `${selectedProject.property.type} / ${selectedProject.property.location}`,
+      projectId: selectedProject.project.id,
+      projectName: selectedProject.project.name,
+      projectType: selectedProject.project.projectType,
+      serviceCategory: focusVendor.category,
+      sitesAreas: focusVendor.sites.join(', '),
+      targetStartDate: '',
+      contractPeriod: '12 months',
+      currentVendor: focusVendor.name,
+      shortlistContext: `${focusVendor.name} plus qualified alternates`,
+    },
+    templateId: '',
+    aiBrief: '',
+    documents: [],
+    pastedScope: '',
+    services: '',
+    inclusions: '',
+    exclusions: '',
+    volume: '',
+    timeline: '',
+    sla: '',
+    evidence: '',
+    compliance: '',
+    licenses: '',
+    insurance: '',
+    hse: '',
+    mobilisation: '',
+    scoring: defaultRfqScoring(),
+  };
+}
+
+function applyRfqTemplate(state: RfqWizardState, template: RfqTemplate): RfqWizardState {
+  return {
+    ...state,
+    templateId: template.id,
+    anchor: { ...state.anchor, serviceCategory: template.category },
+    services: template.serviceDefaults.join('\n'),
+    sla: template.requirementDefaults.join('\n'),
+    compliance: template.mandatoryDocuments.join('\n'),
+    scoring: Object.fromEntries(
+      Object.entries(template.scoringDefaults).map(([key, value]) => [key, String(value)]),
+    ) as Record<RfqScoringKey, string>,
+  };
+}
+
+function buildRfqDraft(template: RfqTemplate | undefined, focusVendor: VendorIntelData, peers: VendorIntelData[], state: RfqWizardState): RfqGeneratedPackage {
+  const extracted = extractRfqScopeFromDocuments(state.documents, state.pastedScope);
+  const serviceLines = splitRfqLines(state.services || extracted.services || state.aiBrief || template?.serviceDefaults.join('\n') || state.anchor.serviceCategory);
+  const inclusionLines = splitRfqLines(state.inclusions || extracted.inclusions || 'Vendor to confirm all inclusions against uploaded/provided scope.');
+  const exclusionLines = splitRfqLines(state.exclusions || extracted.exclusions || 'Vendor must state all exclusions, assumptions, and client dependencies.');
+  const requiredDocs = splitRfqLines(state.compliance)
+    .concat(template?.mandatoryDocuments ?? [])
+    .filter((item, index, items) => items.indexOf(item) === index)
+    .slice(0, 8);
+  const scoringMatrix = (Object.entries(state.scoring) as [RfqScoringKey, string][])
+    .map(([key, value]) => ({
+      label: rfqScoringLabels[key],
+      weight: Number(value) || 0,
+    }));
+  const peerNames = peers.filter(peer => peer.id !== focusVendor.id).slice(0, 3).map(peer => peer.name);
+
+  return {
+    title: `${state.anchor.serviceCategory} RFQ - ${state.anchor.projectName}`,
+    status: 'Review package ready',
+    summary: `RFQ anchored to ${state.anchor.propertyName} / ${state.anchor.projectName} for ${state.anchor.serviceCategory}.`,
+    contextLines: [
+      `Property: ${state.anchor.propertyName} (${state.anchor.propertyMeta}).`,
+      `Project: ${state.anchor.projectName} / ${state.anchor.projectType}.`,
+      `Sites or areas: ${state.anchor.sitesAreas || 'To be confirmed before issue'}.`,
+      `Target start: ${state.anchor.targetStartDate || 'To be confirmed'} / Contract period: ${state.anchor.contractPeriod || 'To be confirmed'}.`,
+      `Current vendor or shortlist context: ${state.anchor.currentVendor || focusVendor.name}; ${state.anchor.shortlistContext || peerNames.join(', ') || 'shortlist to be confirmed'}.`,
+    ],
+    scopeLines: [
+      ...serviceLines.map(line => `Service: ${line}`),
+      ...inclusionLines.map(line => `Inclusion: ${line}`),
+      ...exclusionLines.map(line => `Exclusion/assumption: ${line}`),
+      `Volume or asset basis: ${state.volume || extracted.volume || 'Vendor to price against provided BOQ/scope schedule.'}`,
+      `Timeline: ${state.timeline || extracted.timeline || 'Vendor to provide mobilisation and delivery programme.'}`,
+    ].slice(0, 12),
+    responseFields: [
+      'Company profile and nominated account lead.',
+      'Commercial offer with fixed rates, variable rates, assumptions, and validity period.',
+      'Mobilisation plan with resource counts and start-date constraints.',
+      'SLA commitment by priority level and escalation route.',
+      'Exclusions, client dependencies, and optional alternates.',
+      'Comparable references for similar property/project scope.',
+    ],
+    mandatoryDocuments: requiredDocs.length ? requiredDocs : ['Trade licence', 'Insurance certificates', 'HSE plan', 'Resource plan', 'Comparable references'],
+    slaEvidence: splitRfqLines(state.sla || extracted.sla || template?.requirementDefaults.join('\n') || 'Vendor to propose measurable SLA and response commitments.')
+      .concat(splitRfqLines(state.evidence || extracted.evidence || 'Completion evidence must include photos, timestamp, asset/location reference, work summary, and supervisor sign-off.'))
+      .slice(0, 8),
+    commercialTable: [
+      'Line item / service package',
+      'Unit of measure and quantity basis',
+      'Unit rate and total price',
+      'Mobilisation or one-off cost',
+      'Emergency or out-of-hours rate',
+      'Exclusions, provisional sums, and validity period',
+    ],
+    scoringMatrix,
+    submissionRules: [
+      'Bidders must answer every response field and identify any non-compliance clearly.',
+      'Commercials must remain valid for at least 60 days unless procurement sets a different validity period.',
+      'Clarification questions must be submitted before the clarification deadline stated by procurement.',
+      'Late or incomplete submissions can be excluded from evaluation.',
+    ],
+    actions: ['Copy RFQ', 'Save to workbench', 'Prepare vendor invite'],
+  };
+}
+
+function buildRfqCopilotResult(rfqPackage: RfqGeneratedPackage): VendorCopilotResult {
+  return {
+    action: 'rfq',
+    title: rfqPackage.title,
+    status: rfqPackage.status,
+    summary: rfqPackage.summary,
+    primaryCta: 'Prepare vendor invite',
+    sections: [
+      { title: 'Project anchor', lines: rfqPackage.contextLines.slice(0, 5) },
+      { title: 'Scope and requirements', lines: [...rfqPackage.scopeLines.slice(0, 4), ...rfqPackage.slaEvidence.slice(0, 2)] },
+      { title: 'Evaluation', lines: rfqPackage.scoringMatrix.map(item => `${item.label}: ${item.weight}%`).concat(rfqPackage.submissionRules.slice(0, 2)) },
+    ],
+  };
+}
+
+function formatRfqPackageText(rfqPackage: RfqGeneratedPackage): string {
+  return [
+    rfqPackage.title,
+    rfqPackage.summary,
+    '',
+    'Project / Property Context',
+    ...rfqPackage.contextLines,
+    '',
+    'Scope of Services',
+    ...rfqPackage.scopeLines,
+    '',
+    'Vendor Response Fields',
+    ...rfqPackage.responseFields,
+    '',
+    'Mandatory Documents',
+    ...rfqPackage.mandatoryDocuments,
+    '',
+    'SLA and Evidence Requirements',
+    ...rfqPackage.slaEvidence,
+    '',
+    'Commercial Pricing Table',
+    ...rfqPackage.commercialTable,
+    '',
+    'Evaluation Scoring Matrix',
+    ...rfqPackage.scoringMatrix.map(item => `${item.label}: ${item.weight}%`),
+    '',
+    'Submission and Clarification Rules',
+    ...rfqPackage.submissionRules,
+  ].join('\n');
+}
+
+const vendorResearchCheckCategories: { id: VendorResearchCheckCategory; label: string; detail: string }[] = [
+  { id: 'identity', label: 'Company identity', detail: 'Legal name, registration, website, country, and service fit' },
+  { id: 'compliance', label: 'Compliance documents', detail: 'Trade licence, insurance, certificates, and missing evidence' },
+  { id: 'ownership', label: 'Ownership / registration', detail: 'Parent company, UBO, shareholders, and registration notes' },
+  { id: 'financial', label: 'Financial / commercial risk', detail: 'Commercial warning signals, payment stress, and pricing exposure' },
+  { id: 'operational', label: 'Operational capacity', detail: 'SLA behavior, response capability, dependency, and resourcing risk' },
+  { id: 'reputation', label: 'Public-source reputation', detail: 'Website URLs, public references, notes, disputes, and complaint signals' },
+  { id: 'hse', label: 'HSE readiness', detail: 'Safety plan, method statements, training, incident controls, and certifications' },
+  { id: 'esg', label: 'ESG / labour', detail: 'Environmental, labour, sustainability, and workforce governance signals' },
+  { id: 'cyber', label: 'Cyber / data handling', detail: 'Privacy, data access, remote monitoring, and information security controls' },
+  { id: 'references', label: 'References', detail: 'Client references, comparable contracts, and scope similarity' },
+  { id: 'contract', label: 'Contract risk', detail: 'Expiry, flags, dependency, exclusions, and renewal controls' },
+];
+
+function splitVendorResearchLines(value: string): string[] {
+  return value
+    .split(/\n|;|\|/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
+function buildInitialVendorResearchState(vendor: VendorIntelData): VendorResearchWizardState {
+  return {
+    step: 'vendor',
+    vendorName: vendor.name,
+    legalName: vendor.name,
+    website: '',
+    country: vendor.address.country || 'UAE',
+    registrationNumber: '',
+    serviceCategory: vendor.category,
+    contactName: vendor.poc.name || '',
+    contactEmail: vendor.poc.email || '',
+    currentScope: `${vendor.category} across ${vendor.sites.join(', ')}`,
+    targetScope: `Validate ${vendor.name} before expansion, renewal, or shortlist decision.`,
+    publicUrls: '',
+    references: '',
+    notes: '',
+    documents: [],
+    selectedChecks: vendorResearchCheckCategories.map(category => category.id),
+  };
+}
+
+function extractVendorResearchSignals(documents: VendorSetupDocument[], notes: string, urls: string, vendor: VendorIntelData) {
+  const providedCombined = [
+    notes,
+    urls,
+    ...documents.map(doc => `${doc.name}\n${doc.content}`),
+  ].filter(Boolean).join('\n').toLowerCase();
+  const combined = [
+    notes,
+    urls,
+    vendor.contractFlags.map(flag => flag.description).join('\n'),
+    vendor.insights.join('\n'),
+    ...documents.map(doc => `${doc.name}\n${doc.content}`),
+  ].filter(Boolean).join('\n').toLowerCase();
+  const hasAny = (terms: string[]) => terms.some(term => combined.includes(term.toLowerCase()));
+  const hasProvided = (terms: string[]) => terms.some(term => providedCombined.includes(term.toLowerCase()));
+  return {
+    combined,
+    urlLines: splitVendorResearchLines(urls),
+    noteLines: splitVendorResearchLines(notes),
+    referenceLines: splitVendorResearchLines(notes).filter(line => /client|reference|project|contract|tower|community|mall|hospital|school/i.test(line)),
+    hasLicense: hasAny(['trade license', 'trade licence', 'commercial license', 'registration', 'registered']),
+    hasInsurance: hasAny(['insurance', 'public liability', 'workmen', 'workers compensation', 'professional indemnity']),
+    hasHse: hasAny(['hse', 'health and safety', 'method statement', 'risk assessment', 'iso 45001', 'safety plan']),
+    hasOwnership: hasAny(['owner', 'ownership', 'shareholder', 'parent company', 'ubo', 'ultimate beneficial']),
+    hasFinancialWarning: hasProvided(['bankrupt', 'insolvent', 'overdue payment', 'unpaid invoice', 'liquidation', 'court filing', 'legal claim', 'litigation']),
+    hasReputationWarning: hasProvided(['complaint', 'negative review', 'blacklist', 'termination notice', 'dispute', 'penalty notice', 'fraud']),
+    hasEsg: hasAny(['esg', 'sustainability', 'environment', 'iso 14001', 'labour', 'worker welfare']),
+    hasCyber: hasAny(['cyber', 'privacy', 'data protection', 'iso 27001', 'remote monitoring', 'portal access']),
+    hasReferences: hasAny(['reference', 'client', 'similar project', 'case study', 'completion certificate']),
+  };
+}
+
+function buildResearchFinding(category: VendorResearchCheckCategory, state: VendorResearchWizardState, vendor: VendorIntelData, peers: VendorIntelData[], signals: ReturnType<typeof extractVendorResearchSignals>): VendorResearchFinding {
+  const peerAvgCost = Math.round(peers.reduce((sum, peer) => sum + peer.avgCostPerJob, 0) / Math.max(1, peers.length));
+  const contractFlagText = vendor.contractFlags.map(flag => flag.description).join(' ');
+  switch (category) {
+    case 'identity':
+      return state.legalName && (state.website || signals.urlLines.length) && state.registrationNumber
+        ? { category: 'Company identity', status: 'Clear', finding: 'Identity fields are sufficiently anchored for a procurement review.', evidence: `${state.legalName}, ${state.country}, registration ${state.registrationNumber}.`, action: 'Confirm legal name against trade licence before award.' }
+        : { category: 'Company identity', status: 'Watch', finding: 'Identity is incomplete until legal, registration, and website evidence are confirmed.', evidence: 'One or more identity fields are blank in the intake.', action: 'Request trade licence, company profile, and official website confirmation.' };
+    case 'compliance':
+      if (vendor.contractFlags.length > 0) return { category: 'Compliance documents', status: 'Critical', finding: 'Existing VendorIQ flags must be closed before a low-risk decision.', evidence: contractFlagText, action: 'Request missing documents and attach them to the vendor record.' };
+      return signals.hasLicense && signals.hasInsurance
+        ? { category: 'Compliance documents', status: 'Clear', finding: 'Licence and insurance signals were found in provided material.', evidence: 'Provided documents or notes mention licence and insurance coverage.', action: 'Verify expiry dates and coverage limits before contract execution.' }
+        : { category: 'Compliance documents', status: 'Watch', finding: 'Core compliance documents are not fully evidenced yet.', evidence: 'Licence or insurance signal is missing from the provided material.', action: 'Request trade licence, insurance certificates, and relevant authority approvals.' };
+    case 'ownership':
+      return signals.hasOwnership
+        ? { category: 'Ownership / registration', status: 'Clear', finding: 'Ownership or registration context is present in the provided material.', evidence: 'Notes or documents reference ownership, shareholders, UBO, or parent company.', action: 'Confirm ownership details against official registration documents.' }
+        : { category: 'Ownership / registration', status: 'Watch', finding: 'Ownership and UBO information is not visible yet.', evidence: 'No ownership or shareholder signal found in the provided material.', action: 'Request company registry extract or UBO declaration for due diligence.' };
+    case 'financial':
+      if (signals.hasFinancialWarning) return { category: 'Financial / commercial risk', status: 'Critical', finding: 'Financial or legal warning language appears in provided material.', evidence: 'Notes or documents include insolvency, overdue, litigation, or claim-related terms.', action: 'Escalate to procurement leadership and request finance/legal clearance.' };
+      return vendor.avgCostPerJob > peerAvgCost * 1.12
+        ? { category: 'Financial / commercial risk', status: 'Watch', finding: 'Commercial pricing sits above peer average and needs negotiation guardrails.', evidence: `${vendor.name}: AED ${vendor.avgCostPerJob}/job vs peer average AED ${peerAvgCost}/job.`, action: 'Request rate-card breakdown and benchmark against comparable vendors.' }
+        : { category: 'Financial / commercial risk', status: 'Clear', finding: 'No financial warning signal was detected from provided material or VendorIQ pricing.', evidence: `Average cost is AED ${vendor.avgCostPerJob}/job against peer average AED ${peerAvgCost}/job.`, action: 'Keep commercial validation in the award pack.' };
+    case 'operational':
+      if (vendor.dependencyRisk === 'Critical' || vendor.predictedRisk30d >= 35) return { category: 'Operational capacity', status: 'Critical', finding: 'Operational dependency or predicted risk is too high for uncontrolled expansion.', evidence: `${vendor.dependencyRisk} dependency risk and ${vendor.predictedRisk30d}% predicted 30-day risk.`, action: 'Require capacity plan and backup vendor before scope expansion.' };
+      return vendor.slaCompliance >= 85 && vendor.evidenceCompliance >= 85
+        ? { category: 'Operational capacity', status: 'Clear', finding: 'Operational performance supports controlled use.', evidence: `${vendor.slaCompliance}% SLA and ${vendor.evidenceCompliance}% evidence compliance.`, action: 'Keep KPI monitoring and monthly review cadence.' }
+        : { category: 'Operational capacity', status: 'Watch', finding: 'Performance signals need controls before award or expansion.', evidence: `${vendor.slaCompliance}% SLA, ${vendor.evidenceCompliance}% evidence compliance, ${vendor.repeatFailureRate}% repeat failures.`, action: 'Set improvement targets and supervisor sign-off for first month.' };
+    case 'reputation':
+      if (signals.hasReputationWarning) return { category: 'Public-source reputation', status: 'Critical', finding: 'Reputation warning terms appear in supplied sources.', evidence: 'Provided URLs, notes, or documents mention complaint, dispute, termination, penalty, or fraud.', action: 'Review source details and obtain leadership approval before award.' };
+      return signals.urlLines.length > 0
+        ? { category: 'Public-source reputation', status: 'Clear', finding: 'Public-source URLs were supplied for review context.', evidence: `${signals.urlLines.length} URL${signals.urlLines.length === 1 ? '' : 's'} provided.`, action: 'Validate official website and references manually before final award.' }
+        : { category: 'Public-source reputation', status: 'Watch', finding: 'No public-source URLs were provided for reputation review.', evidence: 'The wizard has no website or public-source URL input beyond VendorIQ data.', action: 'Add official website, registry profile, and relevant public references.' };
+    case 'hse':
+      return signals.hasHse
+        ? { category: 'HSE readiness', status: 'Clear', finding: 'Safety governance appears in the provided material.', evidence: 'HSE, method statement, risk assessment, or ISO 45001 signal detected.', action: 'Request project-specific RAMS before mobilisation.' }
+        : { category: 'HSE readiness', status: 'Watch', finding: 'HSE readiness is not evidenced strongly enough yet.', evidence: 'No HSE plan, RAMS, or safety certification signal found.', action: 'Request HSE plan, RAMS, training records, and incident escalation process.' };
+    case 'esg':
+      return signals.hasEsg
+        ? { category: 'ESG / labour', status: 'Clear', finding: 'ESG or labour-governance signals are present.', evidence: 'Provided material references sustainability, ISO 14001, labour, or worker welfare.', action: 'Confirm ESG commitments are contractually captured where relevant.' }
+        : { category: 'ESG / labour', status: 'Watch', finding: 'ESG and labour governance are not yet evidenced.', evidence: 'No sustainability, environment, or workforce welfare signal found.', action: 'Request ESG/labour declaration for higher-value or resident-facing contracts.' };
+    case 'cyber':
+      return signals.hasCyber
+        ? { category: 'Cyber / data handling', status: 'Clear', finding: 'Data-handling or cyber controls are visible in the provided material.', evidence: 'Cyber, privacy, ISO 27001, remote monitoring, or portal access signal detected.', action: 'Confirm data access roles and security obligations in the contract.' }
+        : { category: 'Cyber / data handling', status: 'Watch', finding: 'Cyber and data controls are not documented yet.', evidence: 'No privacy, security, or data access signal found.', action: 'Request data-handling declaration if the vendor accesses systems, resident data, or IoT platforms.' };
+    case 'references':
+      return signals.hasReferences || state.references.trim()
+        ? { category: 'References', status: 'Clear', finding: 'Reference or comparable-work context is available.', evidence: state.references.trim() || 'Provided material references clients, comparable work, or completion certificates.', action: 'Call at least two references for critical or high-value scopes.' }
+        : { category: 'References', status: 'Watch', finding: 'References are still missing from the due-diligence pack.', evidence: 'No comparable client or project reference signal found.', action: 'Request three comparable references with contact details and scope descriptions.' };
+    case 'contract':
+      if (vendor.contractFlags.length > 0) return { category: 'Contract risk', status: 'Critical', finding: 'Contract flags are active and must be closed before reliance.', evidence: contractFlagText, action: 'Close contract flags or add compensating controls before renewal/award.' };
+      return vendor.contractExpiry.toLowerCase().includes('2026') || vendor.contractExpiry.toLowerCase().includes('2027')
+        ? { category: 'Contract risk', status: 'Clear', finding: 'Contract timing is visible and can be managed through the renewal workflow.', evidence: `Current expiry: ${vendor.contractExpiry}. Active contracts: ${vendor.activeContracts}.`, action: 'Keep renewal reminders and evidence requirements attached.' }
+        : { category: 'Contract risk', status: 'Watch', finding: 'Contract expiry or renewal position needs confirmation.', evidence: `Current expiry field: ${vendor.contractExpiry}.`, action: 'Confirm expiry, renewal rights, termination, and liability caps.' };
+  }
+}
+
+function buildVendorResearchReport(vendor: VendorIntelData, peers: VendorIntelData[], state: VendorResearchWizardState): VendorResearchReport {
+  const signals = extractVendorResearchSignals(state.documents, state.notes, [state.website, state.publicUrls].filter(Boolean).join('\n'), vendor);
+  const findings = state.selectedChecks.map(category => buildResearchFinding(category, state, vendor, peers, signals));
+  const criticalCount = findings.filter(finding => finding.status === 'Critical').length;
+  const watchCount = findings.filter(finding => finding.status === 'Watch').length;
+  const missingDocuments = [
+    state.registrationNumber || signals.hasLicense ? null : 'Trade licence / registration extract',
+    signals.hasInsurance ? null : 'Insurance certificates',
+    signals.hasHse ? null : 'HSE plan / RAMS',
+    signals.hasOwnership ? null : 'Ownership / UBO declaration',
+    signals.hasReferences || state.references.trim() ? null : 'Comparable client references',
+    signals.hasCyber ? null : 'Cyber / data handling declaration if system access is required',
+  ].filter((item): item is string => Boolean(item));
+  const riskScore = Math.max(0, Math.min(100,
+    92
+    - criticalCount * 10
+    - watchCount * 4
+    - Math.min(12, missingDocuments.length * 2)
+    - (vendor.dependencyRisk === 'Critical' ? 8 : vendor.dependencyRisk === 'High' ? 5 : 0)
+    - (vendor.predictedRisk30d >= 35 ? 5 : 0)
+    + (vendor.slaCompliance >= 90 ? 4 : 0)
+    + (vendor.evidenceCompliance >= 90 ? 4 : 0),
+  ));
+  const riskLevel: VendorResearchReport['riskLevel'] = riskScore >= 76 ? 'Low' : riskScore >= 55 ? 'Medium' : 'High';
+  const decision: VendorResearchReport['decision'] = riskScore >= 76 && criticalCount === 0 ? 'Proceed' : riskScore >= 55 && criticalCount <= 1 ? 'Proceed with controls' : 'Do not proceed yet';
+  const sourceBasis: VendorResearchSource[] = [
+    { id: 'vendoriq', type: 'VendorIQ', label: 'VendorIQ performance data', detail: `${vendor.slaCompliance}% SLA, ${vendor.evidenceCompliance}% evidence, ${vendor.dependencyRisk} dependency risk.` },
+    ...signals.urlLines.map((url, index) => ({ id: `url-${index}`, type: 'URL' as const, label: `Public source ${index + 1}`, detail: url })),
+    ...state.documents.map(doc => ({ id: doc.id, type: 'Document' as const, label: doc.name, detail: doc.warning ? `${doc.sizeLabel}; ${doc.warning}` : doc.sizeLabel })),
+    ...(state.notes.trim() ? [{ id: 'notes', type: 'Notes' as const, label: 'Pasted research notes', detail: `${state.notes.trim().length.toLocaleString()} characters provided.` }] : []),
+  ];
+  const requiredActions = [
+    ...findings.filter(finding => finding.status !== 'Clear').map(finding => finding.action),
+    ...missingDocuments.slice(0, 4).map(doc => `Collect ${doc}.`),
+  ].filter((item, index, arr) => arr.indexOf(item) === index).slice(0, 8);
+
+  return {
+    title: `${state.vendorName || vendor.name} due diligence report`,
+    status: `${decision} / ${riskLevel} risk`,
+    decision,
+    riskScore,
+    riskLevel,
+    summary: `Based on entered vendor details, provided URLs, uploaded documents, and VendorIQ performance data, ${state.vendorName || vendor.name} is rated ${riskLevel.toLowerCase()} risk with a ${riskScore}/100 due-diligence score.`,
+    sourceBasis,
+    findings,
+    requiredActions,
+    missingDocuments,
+    nextActions: ['Copy report', 'Save to workbench', 'Request missing documents', 'Prepare review checklist', 'Open vendor profile'],
+  };
+}
+
+function formatVendorResearchReportText(report: VendorResearchReport): string {
+  return [
+    report.title,
+    report.summary,
+    '',
+    `Executive decision: ${report.decision}`,
+    `Risk score: ${report.riskScore}/100 (${report.riskLevel})`,
+    '',
+    'Source basis',
+    ...report.sourceBasis.map(source => `${source.type}: ${source.label} - ${source.detail}`),
+    '',
+    'Findings',
+    ...report.findings.map(finding => `${finding.category} [${finding.status}]: ${finding.finding} Evidence: ${finding.evidence} Action: ${finding.action}`),
+    '',
+    'Missing documents',
+    ...(report.missingDocuments.length ? report.missingDocuments : ['No critical missing document identified from selected checks.']),
+    '',
+    'Required follow-up actions',
+    ...(report.requiredActions.length ? report.requiredActions : ['Proceed with normal procurement controls.']),
+  ].join('\n');
+}
+
+function buildBackgroundCopilotResult(report: VendorResearchReport): VendorCopilotResult {
+  return {
+    action: 'background',
+    title: report.title,
+    status: report.status,
+    summary: report.summary,
+    primaryCta: report.decision === 'Proceed' ? 'Attach report to award file' : 'Close due diligence actions',
+    sections: [
+      { title: 'Executive decision', lines: [`${report.decision}`, `Risk score: ${report.riskScore}/100`, `Risk level: ${report.riskLevel}`] },
+      { title: 'Highest priority findings', lines: report.findings.filter(finding => finding.status !== 'Clear').slice(0, 5).map(finding => `${finding.category}: ${finding.finding}`) },
+      { title: 'Required follow-up', lines: report.requiredActions.length ? report.requiredActions.slice(0, 5) : ['Proceed with normal procurement controls.'] },
+    ],
+  };
+}
+
+function buildInitialActionPackState(vendor: VendorIntelData): VendorActionPackWizardState {
+  const risk = classifyVendorRisk(computeVendorScore(vendor));
+  return {
+    step: 'vendor',
+    vendorId: vendor.id,
+    objective: 'Operational recovery',
+    urgency: vendor.predictedRisk30d >= 35 || vendor.dependencyRisk === 'Critical' || risk === 'At Risk' ? 'High' : 'Medium',
+    owner: 'Vendor Manager',
+    audience: 'Operations, Procurement, Compliance',
+    responseDeadline: vendor.predictedRisk30d >= 35 || risk === 'At Risk' ? '5 working days' : '7 working days',
+    slaTarget: Math.min(98, Math.max(88, vendor.slaCompliance + 5)),
+    repeatFailureTarget: Math.max(3, Math.min(8, vendor.repeatFailureRate - 2)),
+    evidenceTarget: Math.min(98, Math.max(90, vendor.evidenceCompliance + 8)),
+    costGuardrail: vendor.avgCostPerJob,
+    responseCadence: risk === 'At Risk' ? 'Twice weekly until stable' : 'Weekly until next review',
+    recoveryNotes: '',
+  };
+}
+
+function buildVendorActionPack(vendor: VendorIntelData, peers: VendorIntelData[], state: VendorActionPackWizardState): VendorActionPackGenerated {
+  const score = computeVendorScore(vendor);
+  const risk = classifyVendorRisk(score);
+  const peerAvgCost = Math.round(peers.reduce((sum, peer) => sum + peer.avgCostPerJob, 0) / Math.max(1, peers.length));
+  const costPosition = vendor.avgCostPerJob > peerAvgCost ? `AED ${vendor.avgCostPerJob - peerAvgCost}/job above peer average` : `AED ${peerAvgCost - vendor.avgCostPerJob}/job below peer average`;
+  const objectiveActions: Record<VendorActionPackObjective, string[]> = {
+    'Operational recovery': [
+      'Confirm recovery owner and site supervisor coverage.',
+      'Lock response cadence and daily exception reporting.',
+      'Track SLA, repeat failure, evidence, and overdue work until stable.',
+    ],
+    'Commercial negotiation': [
+      'Request rate-card breakdown and credit-note position.',
+      'Benchmark labor, materials, emergency call-out, and repeat-visit pricing.',
+      'Hold commercial approval until service controls are agreed.',
+    ],
+    'Compliance escalation': [
+      'Request missing compliance evidence and expiry dates.',
+      'Confirm HSE, insurance, licence, and certification pack completeness.',
+      'Block scope expansion until compliance gaps are closed.',
+    ],
+  };
+  const evidenceRequests = [
+    'Current trade licence and authority registrations.',
+    'Insurance certificates with expiry dates and coverage limits.',
+    'HSE plan, RAMS, training records, and incident escalation process.',
+    'Monthly evidence pack covering closure photos, supervisor sign-off, and exception notes.',
+    ...vendor.contractFlags.slice(0, 2).map(flag => flag.description),
+  ].filter((item, index, arr) => arr.indexOf(item) === index);
+
+  return {
+    vendorId: vendor.id,
+    vendorName: vendor.name,
+    title: `${vendor.name} action pack`,
+    status: `${state.objective} / ${state.urgency} urgency`,
+    objective: state.objective,
+    urgency: state.urgency,
+    summary: `${state.objective} action pack for ${vendor.name}, owned by ${state.owner}, with response required in ${state.responseDeadline}.`,
+    managerSummary: `${vendor.name} is currently ${risk} with a ${score}/100 score, ${vendor.slaCompliance}% SLA, ${vendor.evidenceCompliance}% evidence compliance, ${vendor.repeatFailureRate}% repeat failures, and ${costPosition}. ${state.recoveryNotes || 'The pack sets operational recovery actions, approval route, KPI targets, and evidence requests before further allocation.'}`,
+    vendorNotice: [
+      `Dear ${vendor.name},`,
+      `We have reviewed the current service position across ${vendor.sites.join(', ')}. The required objective is ${state.objective.toLowerCase()} with ${state.urgency.toLowerCase()} urgency.`,
+      `Please respond within ${state.responseDeadline} with named owners, recovery dates, evidence commitments, and any blockers requiring client or operations support.`,
+      `Targets for this review are ${state.slaTarget}% SLA compliance, repeat failures below ${state.repeatFailureTarget}%, evidence compliance at ${state.evidenceTarget}%, and average job cost held at or below AED ${state.costGuardrail}.`,
+    ].join('\n\n'),
+    internalApprovalRoute: [
+      `${state.owner}: own the action pack, vendor notice, and follow-up cadence.`,
+      'Operations lead: confirm site impact, resource coverage, and recovery feasibility.',
+      'Procurement lead: validate commercial guardrails and backup vendor options.',
+      'Compliance lead: close document, licence, insurance, HSE, and evidence gaps.',
+    ],
+    kpiTargets: [
+      { label: 'SLA compliance', current: `${vendor.slaCompliance}%`, target: `${state.slaTarget}%` },
+      { label: 'Repeat failure', current: `${vendor.repeatFailureRate}%`, target: `< ${state.repeatFailureTarget}%` },
+      { label: 'Evidence compliance', current: `${vendor.evidenceCompliance}%`, target: `${state.evidenceTarget}%` },
+      { label: 'Average job cost', current: `AED ${vendor.avgCostPerJob}`, target: `<= AED ${state.costGuardrail}` },
+      { label: 'Response cadence', current: risk === 'At Risk' ? 'Exception based' : 'Monthly review', target: state.responseCadence },
+    ],
+    localActionQueue: [
+      { title: 'Issue vendor notice with KPI targets', owner: state.owner, due: 'Today', channel: 'Vendor notice' },
+      { title: 'Confirm site recovery owner and backup coverage', owner: 'Operations Lead', due: 'Next working day', channel: 'Operations' },
+      { title: 'Collect missing evidence and compliance pack', owner: 'Compliance Lead', due: state.responseDeadline, channel: 'Document request' },
+      { title: 'Review commercial guardrail and alternate capacity', owner: 'Procurement Lead', due: state.responseDeadline, channel: 'Approval route' },
+      ...objectiveActions[state.objective].map((title, index) => ({ title, owner: state.owner, due: index === 0 ? 'Today' : state.responseDeadline, channel: 'Recovery action' })),
+    ],
+    followUpTimeline: [
+      `Today: send vendor notice and assign internal owners.`,
+      `Next working day: confirm recovery ownership and immediate site impact.`,
+      `${state.responseDeadline}: receive vendor commitments and evidence pack.`,
+      `${state.responseCadence}: review KPI movement until score, evidence, and SLA recover.`,
+    ],
+    evidenceRequests,
+    nextActions: ['Copy action pack', 'Save to workbench', 'Prepare vendor notice', 'Create follow-up tasks', 'Open vendor profile'],
+  };
+}
+
+function formatVendorActionPackText(pack: VendorActionPackGenerated): string {
+  return [
+    pack.title,
+    pack.summary,
+    '',
+    'Manager summary',
+    pack.managerSummary,
+    '',
+    'Vendor notice',
+    pack.vendorNotice,
+    '',
+    'Internal approval route',
+    ...pack.internalApprovalRoute,
+    '',
+    'KPI targets',
+    ...pack.kpiTargets.map(target => `${target.label}: current ${target.current}; target ${target.target}`),
+    '',
+    'Local action queue',
+    ...pack.localActionQueue.map(action => `${action.title} - ${action.owner} - ${action.due} - ${action.channel}`),
+    '',
+    'Follow-up timeline',
+    ...pack.followUpTimeline,
+    '',
+    'Evidence requests',
+    ...pack.evidenceRequests,
+  ].join('\n');
+}
+
+function buildActionPackCopilotResult(pack: VendorActionPackGenerated): VendorCopilotResult {
+  return {
+    action: 'negotiation',
+    title: pack.title,
+    status: pack.status,
+    summary: pack.summary,
+    primaryCta: 'Open action pack wizard',
+    sections: [
+      { title: 'Manager summary', lines: [pack.managerSummary] },
+      { title: 'KPI targets', lines: pack.kpiTargets.map(target => `${target.label}: ${target.current} -> ${target.target}`) },
+      { title: 'Next actions', lines: pack.localActionQueue.slice(0, 5).map(action => `${action.title} - ${action.owner} - ${action.due}`) },
+    ],
+  };
+}
+
+const initialVendorWizardForm: VendorWizardForm = {
+  name: 'Nexus Facilities Services',
+  category: 'FM & HVAC',
+  sites: 'Bayz 102, Lawnz Residences',
+  address: 'Business Bay Service Hub',
+  city: 'Dubai',
+  country: 'UAE',
+  pocName: 'Aisha Rahman',
+  pocTitle: 'Account Director',
+  pocPhone: '+971 55 420 1188',
+  pocEmail: 'aisha.rahman@nexusfm.ae',
+  activeContracts: '1',
+  contractExpiry: 'Mar 2027',
+  slaCompliance: '88',
+  firstTimeFixRate: '84',
+  avgResolutionMin: '44',
+  evidenceCompliance: '90',
+  repeatFailureRate: '6',
+  jobsLast30d: '42',
+  avgCostPerJob: '455',
+  trend: 'flat',
+  dependencyRisk: 'Medium',
+  dependencyNote: 'Primary HVAC backup coverage across two mixed-use residential properties.',
+  predictedRisk30d: '16',
+  contractFlags: 'Onboarding evidence pack due within 14 days',
+};
+
+const aiVendorWizardForm: VendorWizardForm = {
+  name: '',
+  category: 'General FM',
+  sites: '',
+  address: '',
+  city: 'Dubai',
+  country: 'UAE',
+  pocName: '',
+  pocTitle: '',
+  pocPhone: '',
+  pocEmail: '',
+  activeContracts: '1',
+  contractExpiry: '',
+  slaCompliance: '',
+  firstTimeFixRate: '',
+  avgResolutionMin: '',
+  evidenceCompliance: '',
+  repeatFailureRate: '',
+  jobsLast30d: '',
+  avgCostPerJob: '',
+  trend: 'flat',
+  dependencyRisk: 'Medium',
+  dependencyNote: '',
+  predictedRisk30d: '',
+  contractFlags: '',
+};
+
+function formatDocumentSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function cleanDocumentName(name: string): string {
+  return name
+    .replace(/\.[^.]+$/, '')
+    .replace(/\b(contract|vendor|profile|proposal|quote|rfq|sla|insurance|license|trade|certificate|signed|final|copy)\b/gi, ' ')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractLabeledValue(text: string, labels: string[]): string | null {
+  for (const label of labels) {
+    const pattern = new RegExp(`${label}\\s*[:\\-]\\s*([^\\n\\r;|]+)`, 'i');
+    const match = text.match(pattern);
+    if (match?.[1]) return match[1].trim().replace(/\s+/g, ' ');
+  }
+  return null;
+}
+
+function extractNumberValue(text: string, labels: string[]): string | null {
+  const raw = extractLabeledValue(text, labels);
+  const match = raw?.match(/(\d{1,4}(?:,\d{3})?)/);
+  return match?.[1]?.replace(/,/g, '') ?? null;
+}
+
+function extractMoneyValue(text: string, labels: string[]): number | null {
+  const raw = extractLabeledValue(text, labels) ?? text.match(/(?:AED|د\.إ)\s*([0-9][0-9,]*)/i)?.[1] ?? null;
+  const match = raw?.match(/(\d{1,3}(?:,\d{3})+|\d{2,12})/);
+  const value = Number(match?.[1]?.replace(/,/g, ''));
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function extractDateValue(text: string, labels: string[]): string | null {
+  const raw = extractLabeledValue(text, labels)
+    ?? text.match(/\b(?:delivery|mobilization|handover|award deadline|lead time)\b[^:\n\r]*[:\-]?\s*([0-3]?\d[\/\-. ][0-1]?\d[\/\-. ]20\d{2}|20\d{2}[\/\-. ][0-1]?\d[\/\-. ][0-3]?\d|[0-3]?\d\s+[A-Za-z]{3,9}\s+20\d{2})/i)?.[1]
+    ?? null;
+  return raw?.trim().replace(/\s+/g, ' ') ?? null;
+}
+
+function parseComparableDate(value: string | null) {
+  if (!value) return null;
+  const normalized = value.replace(/\./g, '/').replace(/-/g, '/');
+  const dmy = normalized.match(/^(\d{1,2})\/(\d{1,2})\/(20\d{2})$/);
+  const parsed = dmy
+    ? new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]))
+    : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatProcurementMoney(value: number) {
+  if (Math.abs(value) >= 1_000_000) return `AED ${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}M`;
+  return `AED ${value.toLocaleString()}`;
+}
+
+function cleanQuoteVendorName(value: string | null, fallback: string) {
+  const raw = (value || fallback).replace(/\s+/g, ' ').trim();
+  const cleaned = raw
+    .replace(/^(supplier|vendor|company|contractor)\s*name\s*[:\-]?\s*/i, '')
+    .split(/\b(?:quote status|quote total|commercial offer|sla commitment|service level|delivery date|mobilization date|mobilisation date|warranty|exclusions|scope of|commercial conditions|recommendation context|clarification)\b/i)[0]
+    .replace(/[.;,:-]+$/g, '')
+    .trim();
+  const words = cleaned.split(/\s+/).filter(Boolean);
+  if (!cleaned) return fallback;
+  return words.length > 6 ? words.slice(0, 6).join(' ') : cleaned;
+}
+
+function compactQuoteText(value: string, maxLength = 96) {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1).trim()}...` : normalized;
+}
+
+function inferVendorCategory(text: string): string | null {
+  const lower = text.toLowerCase();
+  if (/(hvac|chiller|cooling|air conditioning)/.test(lower)) return 'FM & HVAC';
+  if (/(electrical|power|lv|switchgear)/.test(lower)) return 'FM & Electrical';
+  if (/(mep|mechanical|plumbing|systems)/.test(lower)) return 'MEP & Systems';
+  if (/(cleaning|soft fm|housekeeping|janitorial)/.test(lower)) return 'Cleaning & Soft FM';
+  if (/(security|guard|cctv|access control)/.test(lower)) return 'Security';
+  if (/(landscaping|irrigation|horticulture)/.test(lower)) return 'Landscaping';
+  if (/(fire|alarm|safety|civil defense)/.test(lower)) return 'Fire & Safety';
+  if (/(lift|elevator|escalator)/.test(lower)) return 'Elevators & Lifts';
+  if (/(civil|fit out|engineering|structure)/.test(lower)) return 'Engineering & Civil';
+  return null;
+}
+
+function buildVendorAiDraft(
+  current: VendorWizardForm,
+  documents: VendorSetupDocument[],
+  notes: string,
+): { form: VendorWizardForm; extractions: VendorAiExtraction[] } {
+  const combined = [notes, ...documents.map(doc => `${doc.name}\n${doc.content}`)].filter(Boolean).join('\n');
+  const firstDocumentName = documents[0]?.name ? cleanDocumentName(documents[0].name) : '';
+  const next: VendorWizardForm = { ...current };
+  const extractions: VendorAiExtraction[] = [];
+  const setField = (field: keyof VendorWizardForm, value: string | null, label: string, source: string) => {
+    if (!value) return;
+    next[field] = value as never;
+    extractions.push({ label, value, source });
+  };
+
+  setField('name', extractLabeledValue(combined, ['vendor name', 'supplier name', 'company name', 'contractor']) || firstDocumentName || null, 'Vendor name', 'Profile');
+  setField('category', inferVendorCategory(combined), 'Category', 'Scope');
+  setField('sites', extractLabeledValue(combined, ['sites covered', 'properties', 'locations', 'site scope', 'service locations']), 'Sites covered', 'Scope');
+  setField('contractExpiry', extractLabeledValue(combined, ['contract expiry', 'expiry date', 'renewal date', 'valid until']), 'Contract expiry', 'Contract');
+  setField('pocName', extractLabeledValue(combined, ['primary contact', 'contact person', 'account manager', 'contact name']), 'Primary contact', 'Contacts');
+  setField('pocTitle', extractLabeledValue(combined, ['contact title', 'designation', 'job title']), 'Contact title', 'Contacts');
+
+  const email = combined.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] ?? null;
+  const phone = combined.match(/(?:\+?\d[\d\s().-]{7,}\d)/)?.[0]?.replace(/\s+/g, ' ') ?? null;
+  setField('pocEmail', email, 'Email', 'Contacts');
+  setField('pocPhone', phone, 'Phone', 'Contacts');
+
+  setField('slaCompliance', extractNumberValue(combined, ['sla compliance', 'sla', 'service level']), 'SLA compliance', 'Performance');
+  setField('firstTimeFixRate', extractNumberValue(combined, ['first time fix', 'first-time fix', 'ftf']), 'First-time fix', 'Performance');
+  setField('avgResolutionMin', extractNumberValue(combined, ['average resolution minutes', 'avg resolution minutes', 'resolution time']), 'Resolution minutes', 'Performance');
+  setField('evidenceCompliance', extractNumberValue(combined, ['evidence compliance', 'photo evidence', 'closure evidence']), 'Evidence compliance', 'Compliance');
+  setField('repeatFailureRate', extractNumberValue(combined, ['repeat failure', 'repeat failures', 'repeat rate']), 'Repeat failure', 'Performance');
+  setField('jobsLast30d', extractNumberValue(combined, ['jobs last 30 days', 'monthly jobs', 'work orders']), 'Jobs last 30 days', 'Volume');
+  setField('avgCostPerJob', extractNumberValue(combined, ['avg cost per job', 'average cost per job', 'rate per job', 'cost per job']), 'Avg cost / job', 'Commercial');
+  setField('activeContracts', extractNumberValue(combined, ['active contracts', 'contracts']), 'Active contracts', 'Contract');
+
+  const lower = combined.toLowerCase();
+  if (/critical dependency|single vendor|sole provider/.test(lower)) {
+    next.dependencyRisk = 'Critical';
+    extractions.push({ label: 'Dependency risk', value: 'Critical', source: 'Risk' });
+  } else if (/high dependency|limited backup|specialist/.test(lower)) {
+    next.dependencyRisk = 'High';
+    extractions.push({ label: 'Dependency risk', value: 'High', source: 'Risk' });
+  } else if (/low dependency|backup available|multi vendor/.test(lower)) {
+    next.dependencyRisk = 'Low';
+    extractions.push({ label: 'Dependency risk', value: 'Low', source: 'Risk' });
+  }
+
+  if (/declining|late|breach|non.?compliant/.test(lower)) next.trend = 'down';
+  if (/improving|preferred|excellent|strong/.test(lower)) next.trend = 'up';
+
+  const flags = [
+    /insurance/i.test(combined) ? null : 'Insurance certificate not detected',
+    /trade license|licence/i.test(combined) ? null : 'Trade license not detected',
+    /sla|service level/i.test(combined) ? null : 'SLA evidence should be confirmed',
+  ].filter(Boolean);
+  if (flags.length) {
+    next.contractFlags = flags.join('; ');
+    extractions.push({ label: 'Contract flags', value: `${flags.length} checks`, source: 'Compliance' });
+  }
+
+  if (!next.dependencyNote || next.dependencyNote === initialVendorWizardForm.dependencyNote) {
+    next.dependencyNote = `${next.dependencyRisk} dependency risk across ${parseVendorSites(next.sites).length || 1} site scope based on uploaded onboarding documents.`;
+  }
+
+  return { form: next, extractions };
+}
+
+function buildQuoteAnalysis(documents: VendorSetupDocument[], notes: string, assignment: ProcurementAssignmentContext): QuoteAnalysis {
+  const noteBlocks = notes
+    .split(/\n\s*(?:---+|quote\s+\d+|vendor\s+quote)\s*\n/i)
+    .map(block => block.trim())
+    .filter(Boolean);
+  const sources = [
+    ...documents.map(doc => ({ id: doc.id, name: doc.name, content: doc.content, fromFile: true })),
+    ...noteBlocks.map((block, index) => ({ id: `note-${index}`, name: `Pasted quote ${index + 1}`, content: block, fromFile: false })),
+  ];
+  const requiredDate = parseComparableDate(assignment.requiredDeliveryDate);
+  const items = sources.map((source, index) => {
+    const hasExtractableText = source.content.trim().length > 20;
+    const text = `${source.name}\n${source.content}`;
+    const vendorName = cleanQuoteVendorName(
+      extractLabeledValue(text, ['vendor name', 'supplier name', 'company name', 'contractor', 'vendor']),
+      cleanDocumentName(source.name) || `${assignment.packageName} bidder ${index + 1}`,
+    );
+    const amount = hasExtractableText
+      ? (extractMoneyValue(text, ['total', 'quote total', 'quoted price', 'price', 'amount', 'commercial offer', 'annual value', 'contract value', 'package value']) ?? null)
+      : null;
+    const slaValue = Number(extractNumberValue(text, ['sla', 'sla commitment', 'response sla', 'service level']));
+    const sla = hasExtractableText && Number.isFinite(slaValue) && slaValue > 0 ? slaValue : null;
+    const deliveryDate = hasExtractableText ? extractDateValue(text, ['delivery date', 'required delivery', 'mobilization date', 'mobilisation date', 'lead time', 'award deadline', 'handover date']) : null;
+    const deliveryParsed = parseComparableDate(deliveryDate);
+    const deliveryLate = Boolean(requiredDate && deliveryParsed && deliveryParsed.getTime() > requiredDate.getTime());
+    const warranty = hasExtractableText
+      ? extractLabeledValue(text, ['warranty', 'defect liability', 'guarantee']) || (text.toLowerCase().includes('warranty') ? 'Included' : 'Not clearly stated')
+      : 'Not clearly stated';
+    const exclusions = hasExtractableText
+      ? extractLabeledValue(text, ['exclusions', 'excluded', 'not included']) || (text.toLowerCase().includes('parts') ? 'Parts to be confirmed' : 'No major exclusions detected')
+      : 'Needs readable quote text';
+    const evidence = /photo|evidence|report|completion|close.?out/i.test(text) ? 8 : 0;
+    const warrantyBonus = warranty === 'Not clearly stated' ? 0 : 4;
+    const exclusionPenalty = /not included|excluded|tbd|to be confirmed/i.test(exclusions) ? 7 : 0;
+    const missingPenalty = (hasExtractableText ? 0 : 22) + (amount === null ? 14 : 0) + (sla === null ? 8 : 0) + (deliveryDate === null ? 8 : 0);
+    const overBudgetRatio = amount === null ? 0 : Math.max(0, (amount - assignment.budgetAllowance) / Math.max(assignment.budgetAllowance, 1));
+    const pricePenalty = Math.min(22, overBudgetRatio * 70);
+    const deliveryPenalty = deliveryLate ? 10 : 0;
+    const score = Math.max(20, Math.min(98, Math.round(54 + Math.min(22, (sla ?? 75) / 5) + evidence + warrantyBonus - exclusionPenalty - pricePenalty - deliveryPenalty - missingPenalty)));
+    const risk: QuoteAnalysisItem['risk'] = score >= 78 ? 'Low' : score >= 62 ? 'Medium' : 'High';
+    const missingFields = [
+      amount === null ? 'Price' : null,
+      sla === null ? 'SLA commitment' : null,
+      deliveryDate === null ? 'Delivery / award date' : null,
+      warranty === 'Not clearly stated' ? 'Warranty' : null,
+      /not included|tbd|to be confirmed/i.test(exclusions) ? 'Exclusions detail' : null,
+      evidence === 0 ? 'Evidence commitment' : null,
+    ].filter((field): field is string => Boolean(field));
+    const extractionStatus: QuoteExtractionStatus = !hasExtractableText
+      ? 'Unsupported / no text'
+      : amount === null
+        ? 'Missing price'
+        : sla === null
+          ? 'Missing SLA'
+          : deliveryDate === null
+            ? 'Missing delivery'
+            : missingFields.length > 0
+              ? 'Needs clarification'
+              : 'Read';
+    const clarificationQuestions = !hasExtractableText
+      ? ['Upload a text-readable quote PDF/DOC/XLSX or paste the quote terms manually so AI can extract commercial, delivery, and evidence commitments.']
+      : [
+        amount === null ? `Confirm total commercial offer for ${assignment.packageName} and whether the rate is fixed or provisional.` : null,
+        sla === null ? 'Confirm committed SLA percentage and response-time basis.' : null,
+        deliveryDate === null ? `Confirm delivery or mobilization date against the ${assignment.requiredDeliveryDate} requirement.` : null,
+        deliveryLate ? `Delivery date appears later than required ${assignment.requiredDeliveryDate}; confirm mitigation or accelerated delivery.` : null,
+        warranty === 'Not clearly stated' ? 'Confirm warranty or defect liability period.' : null,
+        /not included|tbd|to be confirmed/i.test(exclusions) ? 'Itemize exclusions, provisional sums, and parts/material assumptions.' : null,
+        evidence === 0 ? `Confirm evidence commitments: ${assignment.evidenceRequirements.join(', ')}.` : null,
+      ].filter((question): question is string => Boolean(question));
+    const commercialDelta = amount === null ? null : amount - assignment.budgetAllowance;
+    const recommendationReason = !hasExtractableText
+      ? 'Cannot score reliably until quote text is extracted or pasted.'
+      : risk === 'Low'
+        ? `Strong fit against ${assignment.packageName} cost, delivery, evidence, and compliance requirements.`
+        : risk === 'Medium'
+          ? 'Commercially usable but needs clarification before award.'
+          : 'Do not award until missing commitments, exclusions, and delivery risk are resolved.';
+    const nextActions = [
+      risk === 'Low' ? 'Prepare award brief' : null,
+      missingFields.length > 0 ? 'Draft clarification email' : null,
+      commercialDelta !== null && commercialDelta > 0 ? 'Create negotiation points' : null,
+      risk !== 'Low' ? 'Hold award decision' : null,
+    ].filter((action): action is string => Boolean(action));
+    const finding = !hasExtractableText
+      ? 'No extractable quote text was found. Paste the quote terms or upload a readable document.'
+      : amount === null
+        ? 'Price was not detected. Review this quote before award.'
+        : sla === null
+          ? 'SLA was not detected. Clarify service commitment before award.'
+          : deliveryDate === null
+            ? 'Delivery date was not detected. Clarify programme commitment before award.'
+            : deliveryLate
+              ? 'Delivery appears later than the required package date.'
+              : risk === 'Low'
+                ? 'Strong commercial and programme fit for shortlisting.'
+                : risk === 'Medium'
+                  ? 'Usable quote, but clarify scope or commercial assumptions.'
+                  : 'High-risk quote unless exclusions and commitments improve.';
+    return {
+      id: source.id,
+      vendorName,
+      amount,
+      sla,
+      deliveryDate,
+      warranty,
+      exclusions,
+      extractionStatus,
+      missingFields,
+      clarificationQuestions,
+      commercialDelta,
+      recommendationReason,
+      nextActions,
+      score,
+      risk,
+      finding,
+    };
+  }).sort((a, b) => b.score - a.score);
+  const winner = items[0];
+  const amounts = items.map(item => item.amount).filter((amount): amount is number => amount !== null);
+  const highestAmount = amounts.length ? Math.max(...amounts) : 0;
+  const lowestAmount = amounts.length ? Math.min(...amounts) : 0;
+  const savings = winner.amount === null ? 0 : Math.max(0, highestAmount - winner.amount);
+  const commercialSpread = amounts.length >= 2 ? highestAmount - lowestAmount : null;
+  const winnerLowestPremium = winner.amount === null || amounts.length < 2 ? null : winner.amount - lowestAmount;
+  const clarificationQuestions = items.flatMap(item => item.clarificationQuestions.map(question => `${item.vendorName}: ${question}`)).slice(0, 8);
+  const riskConditions = [
+    items.some(item => item.extractionStatus === 'Unsupported / no text') ? 'At least one quote has no extractable text.' : null,
+    items.some(item => item.amount === null) ? 'At least one quote is missing a commercial offer.' : null,
+    items.some(item => item.sla === null) ? 'At least one quote is missing an SLA commitment.' : null,
+    items.some(item => item.deliveryDate === null) ? 'At least one quote is missing delivery or mobilization date.' : null,
+    items.some(item => item.risk === 'High') ? 'High-risk quote present; do not award without clarification.' : null,
+    winner.missingFields.length > 0 ? `Recommended bidder still needs confirmation: ${winner.missingFields.join(', ')}.` : null,
+  ].filter((condition): condition is string => Boolean(condition));
+  const nextActions = [
+    'Prepare Award Brief',
+    clarificationQuestions.length > 0 ? 'Draft Clarification Email' : null,
+    items.some(item => item.commercialDelta !== null && item.commercialDelta > 0) ? 'Create Negotiation Points' : null,
+    'Link Result To ProjectCommand',
+  ].filter((action): action is string => Boolean(action));
+  return {
+    assignment,
+    winner,
+    items,
+    savings,
+    summary: winner.amount === null
+      ? `${winner.vendorName} is the strongest readable quote for ${assignment.packageName} with a ${winner.score}/100 comparison score, but price still needs confirmation.`
+      : `${winner.vendorName} is the recommended quote for ${assignment.packageName} with a ${winner.score}/100 comparison score and ${formatProcurementMoney(winner.amount)} commercial offer.`,
+    findings: [
+      amounts.length >= 2
+        ? winnerLowestPremium && winnerLowestPremium > 0
+          ? `${winner.vendorName} is ${formatProcurementMoney(winnerLowestPremium)} above the lowest quote; award rationale depends on delivery, warranty, evidence, and lower execution risk.`
+          : `Selecting the recommended quote is ${formatProcurementMoney(savings)} below the highest readable offer.`
+        : 'Commercial spread needs at least two readable prices before final award.',
+      `${winner.vendorName} ${winner.deliveryDate === null ? 'needs delivery confirmation' : `commits delivery/mobilization around ${winner.deliveryDate}`} against required ${assignment.requiredDeliveryDate}.`,
+      `${winner.vendorName} ${winner.sla === null ? 'needs SLA confirmation' : `offers ${winner.sla}% SLA commitment`} with ${winner.warranty.toLowerCase()} warranty position.`,
+      items.some(item => item.risk === 'High') ? 'At least one quote carries high clarification risk before award.' : 'No high-risk quote blockers were detected in the submitted set.',
+    ],
+    commercialSpread,
+    riskConditions,
+    clarificationQuestions,
+    nextActions,
+  };
+}
+
+function buildQuoteActionArtifact(action: string, analysis: QuoteAnalysis): QuoteActionArtifact {
+  const { assignment, winner } = analysis;
+  const competitorLines = analysis.items.map(item => `${item.vendorName}: ${item.score}/100, ${item.amount === null ? 'price missing' : formatProcurementMoney(item.amount)}, ${item.sla === null ? 'SLA missing' : `${item.sla}% SLA`}, ${item.deliveryDate ?? 'delivery missing'}, ${item.risk} risk.`);
+  if (action === 'Prepare Award Brief') {
+    return {
+      title: 'Award Brief Prepared',
+      status: 'Draft prepared',
+      body: `${winner.vendorName} is recommended for ${assignment.packageName} subject to resolving listed conditions. The recommendation is based on package budget, delivery, SLA, warranty, exclusions, evidence readiness, and award risk.`,
+      lines: [
+        `Assigned to: ${assignment.propertyName} / ${assignment.projectName} / ${assignment.packageName}`,
+        `Recommended bidder: ${winner.vendorName}`,
+        `Score: ${winner.score}/100 (${winner.risk} risk)`,
+        winner.amount === null ? 'Commercial offer: requires confirmation' : `Commercial offer: ${formatProcurementMoney(winner.amount)} vs budget ${formatProcurementMoney(assignment.budgetAllowance)}`,
+        winner.deliveryDate === null ? 'Delivery: requires confirmation' : `Delivery / mobilization: ${winner.deliveryDate} vs required ${assignment.requiredDeliveryDate}`,
+        winner.sla === null ? 'SLA: requires confirmation' : `SLA: ${winner.sla}%`,
+        analysis.commercialSpread === null ? 'Commercial spread: incomplete until all prices are readable' : `Commercial spread: ${formatProcurementMoney(analysis.commercialSpread)}`,
+        `Award conditions: ${analysis.riskConditions.length ? analysis.riskConditions.join(' ') : 'No blocking clarification conditions detected.'}`,
+      ],
+    };
+  }
+  if (action === 'Draft Clarification Email') {
+    return {
+      title: 'Clarification Email Draft',
+      status: 'Draft prepared',
+      body: `Draft clarification request for ${assignment.packageName} bidders. No email is sent from this screen.`,
+      lines: analysis.clarificationQuestions.length
+        ? analysis.clarificationQuestions
+        : ['Confirm commercial validity, delivery date, SLA basis, warranty, exclusions, and evidence commitments before award.'],
+    };
+  }
+  if (action === 'Create Negotiation Points') {
+    return {
+      title: 'Negotiation Points Created',
+      status: 'Ready for manager review',
+      body: `Use the strongest compliant offer as the commercial anchor while protecting ${assignment.packageName} delivery and evidence quality.`,
+      lines: [
+        `Package budget guardrail: ${formatProcurementMoney(assignment.budgetAllowance)}.`,
+        `Required delivery / award deadline: ${assignment.requiredDeliveryDate}.`,
+        ...competitorLines,
+        'Ask higher-priced bidders to match the strongest commercial offer without reducing delivery, evidence, warranty, or compliance commitments.',
+      ],
+    };
+  }
+  return {
+    title: 'ProjectCommand Link Ready',
+    status: 'Ready to link',
+    body: `This quote comparison is ready to attach to ${assignment.propertyName} / ${assignment.projectName} / ${assignment.packageName}.`,
+    lines: [
+      'Source: user-selected procurement context.',
+      'Quote data: uploaded files and pasted quote text only.',
+      ...competitorLines,
+    ],
+  };
+}
+
+function safeDownloadName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 72) || 'quote-comparison';
+}
+
+function formatQuoteComparisonReportText(analysis: QuoteAnalysis): string {
+  const { assignment, winner } = analysis;
+  return [
+    `Quote Comparison Report - ${assignment.packageName}`,
+    `Property: ${assignment.propertyName}`,
+    `Project: ${assignment.projectName}`,
+    `Budget guardrail: ${formatProcurementMoney(assignment.budgetAllowance)}`,
+    `Required delivery / award deadline: ${assignment.requiredDeliveryDate}`,
+    '',
+    'Executive recommendation',
+    `Recommended bidder: ${winner.vendorName}`,
+    `Score: ${winner.score}/100`,
+    `Risk: ${winner.risk}`,
+    winner.amount === null ? 'Commercial offer: requires confirmation' : `Commercial offer: ${formatProcurementMoney(winner.amount)}`,
+    winner.commercialDelta === null ? 'Budget variance: not available' : `Budget variance: ${winner.commercialDelta >= 0 ? '+' : '-'}${formatProcurementMoney(Math.abs(winner.commercialDelta))}`,
+    winner.sla === null ? 'SLA: requires confirmation' : `SLA: ${winner.sla}%`,
+    winner.deliveryDate === null ? 'Delivery: requires confirmation' : `Delivery: ${winner.deliveryDate}`,
+    `Warranty: ${winner.warranty}`,
+    '',
+    'Decision summary',
+    analysis.summary,
+    '',
+    'Key findings',
+    ...analysis.findings.map(finding => `- ${finding}`),
+    '',
+    'Risk and clarification conditions',
+    ...(analysis.riskConditions.length ? analysis.riskConditions : ['No blocking clarification conditions detected.']).map(condition => `- ${condition}`),
+    '',
+    'Supplier ranking detail',
+    ...analysis.items.flatMap((item, index) => [
+      `${index + 1}. ${item.vendorName}`,
+      `   Score: ${item.score}/100 (${item.risk} risk)`,
+      `   Commercial: ${item.amount === null ? 'Price missing' : formatProcurementMoney(item.amount)}`,
+      `   SLA / delivery: ${item.sla === null ? 'SLA missing' : `${item.sla}% SLA`} / ${item.deliveryDate ?? 'Delivery missing'}`,
+      `   Warranty: ${item.warranty}`,
+      `   Exclusions: ${item.exclusions}`,
+      `   Status: ${item.extractionStatus}`,
+      `   Recommendation: ${item.recommendationReason}`,
+      `   Finding: ${item.finding}`,
+      ...(item.clarificationQuestions.length
+        ? ['   Clarifications:', ...item.clarificationQuestions.map(question => `   - ${question}`)]
+        : ['   Clarifications: none detected.']),
+      '',
+    ]),
+    'Recommended next actions',
+    ...analysis.nextActions.map(action => `- ${action}`),
+    '',
+    'Demo note: generated locally from uploaded quote files and pasted quote text only. No award, approval, email, or external workflow was triggered.',
+  ].join('\n');
+}
+
+function downloadTextFile(filename: string, content: string) {
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function numeric(value: string, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseVendorSites(raw: string): string[] {
+  return raw.split(',').map(site => site.trim()).filter(Boolean);
+}
+
+function parseVendorFlags(raw: string): VendorIntelData['contractFlags'] {
+  return raw
+    .split(';')
+    .map(flag => flag.trim())
+    .filter(Boolean)
+    .map(description => ({ type: 'warning' as const, description }));
+}
+
+function vendorWizardScore(form: VendorWizardForm): number {
+  return computeVendorScore({
+    slaCompliance: numeric(form.slaCompliance, 85),
+    firstTimeFixRate: numeric(form.firstTimeFixRate, 80),
+    avgResolutionMin: numeric(form.avgResolutionMin, 50),
+    evidenceCompliance: numeric(form.evidenceCompliance, 85),
+    avgCostPerJob: numeric(form.avgCostPerJob, 450),
+  });
+}
+
+function buildVendorInsights(form: VendorWizardForm, score: number): VendorIntelData['insights'] {
+  const risk = classifyVendorRisk(score);
+  return [
+    `${form.name} is being onboarded with a starting vendor score of ${score}/100 and ${risk} classification.`,
+    `SLA baseline is ${numeric(form.slaCompliance, 85)}% with ${numeric(form.firstTimeFixRate, 80)}% first-time fix across ${numeric(form.jobsLast30d, 20)} expected monthly jobs.`,
+    `Evidence compliance is set at ${numeric(form.evidenceCompliance, 85)}%, so the vendor will be monitored for photo, report, and closure proof quality.`,
+    `${form.dependencyRisk} dependency risk has been assigned for ${parseVendorSites(form.sites).join(', ') || 'selected properties'}.`,
+  ];
+}
+
+function buildVendorRecommendations(form: VendorWizardForm, score: number): VendorIntelData['recommendations'] {
+  if (score >= 78) {
+    return [
+      { title: 'Approve preferred onboarding', detail: 'Initial KPI baseline supports preferred rotation once contract evidence is complete.', action: 'review' },
+      { title: 'Lock service rate during onboarding', detail: `AED ${numeric(form.avgCostPerJob, 450)}/job is within target range. Confirm rate card before first work package allocation.`, action: 'renegotiate' },
+    ];
+  }
+  if (score >= 58) {
+    return [
+      { title: 'Start with controlled scope', detail: 'Use a 30-day probation window and monitor SLA, evidence, and repeat failures before expanding coverage.', action: 'review' },
+      { title: 'Assign backup vendor coverage', detail: 'Dependency should be managed until the vendor proves performance across the first job cycle.', action: 'reassign' },
+    ];
+  }
+  return [
+    { title: 'Require onboarding review before allocation', detail: 'Baseline indicators are below threshold. Do not assign critical work until corrective commitments are agreed.', action: 'review' },
+    { title: 'Limit scope to low-risk work', detail: 'Use only non-critical jobs until SLA and evidence metrics improve.', action: 'limit' },
+  ];
+}
+
+function buildVendorFromWizard(form: VendorWizardForm): VendorIntelData {
+  const score = vendorWizardScore(form);
+  const flags = parseVendorFlags(form.contractFlags);
+  const id = `VND-${Date.now().toString().slice(-6)}`;
+  return buildDefaultVendor({
+    id,
+    name: form.name.trim() || 'New Vendor',
+    category: form.category,
+    trend: form.trend,
+    slaCompliance: numeric(form.slaCompliance, 85),
+    firstTimeFixRate: numeric(form.firstTimeFixRate, 80),
+    avgResolutionMin: numeric(form.avgResolutionMin, 50),
+    evidenceCompliance: numeric(form.evidenceCompliance, 85),
+    repeatFailureRate: numeric(form.repeatFailureRate, 8),
+    avgCostPerJob: numeric(form.avgCostPerJob, 450),
+    activeContracts: numeric(form.activeContracts, 1),
+    contractExpiry: form.contractExpiry || 'Dec 2026',
+    sites: parseVendorSites(form.sites),
+    jobsLast30d: numeric(form.jobsLast30d, 20),
+    insights: buildVendorInsights(form, score),
+    anomaly: score < 58 ? 'Onboarding risk: baseline score is below Watchlist threshold. Review before assigning critical work.' : null,
+    contractFlags: flags,
+    predictedRisk30d: numeric(form.predictedRisk30d, 20),
+    projectedTrend: form.trend,
+    recommendations: buildVendorRecommendations(form, score),
+    dependencyRisk: form.dependencyRisk,
+    dependencyNote: form.dependencyNote || `${form.dependencyRisk} dependency risk across ${parseVendorSites(form.sites).length || 1} site scope.`,
+    address: { street: form.address, city: form.city, country: form.country },
+    poc: { name: form.pocName, title: form.pocTitle, phone: form.pocPhone, email: form.pocEmail },
+  });
+}
+
+function riskColor(level: VendorRiskLevel): string {
+  if (level === 'Preferred') return '#38D98A';
+  if (level === 'Watchlist') return '#FF9B38';
+  return '#FF4B4B';
+}
+
+function riskBg(level: VendorRiskLevel): string {
+  if (level === 'Preferred') return 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400';
+  if (level === 'Watchlist') return 'bg-amber-500/10 border-amber-500/25 text-amber-400';
+  return 'bg-red-500/10 border-red-500/25 text-red-400';
+}
+
+function scoreColor(score: number): string {
+  if (score >= 80) return '#38D98A';
+  if (score >= 65) return '#FF9B38';
+  return '#FF4B4B';
+}
+
+function TrendIcon({ trend, size = 13 }: { trend: VendorTrend; size?: number }) {
+  if (trend === 'up') return <TrendingUp size={size} className="text-emerald-400" />;
+  if (trend === 'down') return <TrendingDown size={size} className="text-red-400" />;
+  return <Minus size={size} className="text-amber-400" />;
+}
+
+function dependencyColor(level: string): string {
+  if (level === 'Low') return '#38D98A';
+  if (level === 'Medium') return '#FF9B38';
+  if (level === 'High') return '#FF4B4B';
+  return '#C026D3';
+}
+
+function flagIcon(type: string) {
+  if (type === 'breach') return <XCircle size={11} className="text-red-400 flex-shrink-0 mt-0.5" />;
+  if (type === 'missing') return <FileWarning size={11} className="text-amber-400 flex-shrink-0 mt-0.5" />;
+  return <AlertTriangle size={11} className="text-amber-300 flex-shrink-0 mt-0.5" />;
+}
+
+function actionColor(action: string): string {
+  if (action === 'reassign') return 'text-blue-400 border-blue-500/30 bg-blue-500/10';
+  if (action === 'renegotiate') return 'text-amber-400 border-amber-500/30 bg-amber-500/10';
+  if (action === 'review') return 'text-purple-400 border-purple-500/30 bg-purple-500/10';
+  return 'text-red-400 border-red-500/30 bg-red-500/10';
+}
+
+function MiniBar({ value, max, color }: { value: number; max: number; color: string }) {
+  return (
+    <div className="h-1 bg-[#0A1628] rounded-full overflow-hidden w-16">
+      <motion.div
+        initial={{ width: 0 }}
+        animate={{ width: `${Math.min(100, (value / max) * 100)}%` }}
+        transition={{ duration: 0.5 }}
+        className="h-full rounded-full"
+        style={{ background: color }}
+      />
+    </div>
+  );
+}
+
+function ScoreRing({ score, size = 52 }: { score: number; size?: number }) {
+  const r = (size - 8) / 2;
+  const circ = 2 * Math.PI * r;
+  const dash = (score / 100) * circ;
+  const color = scoreColor(score);
+  return (
+    <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(46,127,255,0.12)" strokeWidth={5} />
+      <motion.circle
+        cx={size / 2} cy={size / 2} r={r} fill="none"
+        stroke={color} strokeWidth={5} strokeLinecap="round"
+        strokeDasharray={`${dash} ${circ}`}
+        initial={{ strokeDasharray: `0 ${circ}` }}
+        animate={{ strokeDasharray: `${dash} ${circ}` }}
+        transition={{ duration: 0.7 }}
+      />
+      <text
+        x={size / 2} y={size / 2 + 1}
+        textAnchor="middle" dominantBaseline="middle"
+        fill={color} fontSize={13} fontWeight={700}
+        style={{ transform: `rotate(90deg)`, transformOrigin: `${size / 2}px ${size / 2}px`, fontFamily: 'Space Grotesk, sans-serif' }}
+      >
+        {score}
+      </text>
+    </svg>
+  );
+}
+
+interface DetailSectionProps {
+  icon: React.ReactNode;
+  title: string;
+  children: React.ReactNode;
+}
+
+function DetailSection({ icon, title, children }: DetailSectionProps) {
+  return (
+    <div className="bg-[#07111F] border border-[rgba(46,127,255,0.14)] rounded-xl p-4">
+      <div className="flex items-center gap-2 mb-3.5">
+        <div className="w-6 h-6 rounded-lg bg-[#2E7FFF]/15 flex items-center justify-center flex-shrink-0">
+          {icon}
+        </div>
+        <span className="text-[10px] font-bold text-[#2E7FFF] uppercase tracking-widest">{title}</span>
+        <div className="flex-1 h-px bg-[rgba(46,127,255,0.12)]" />
+      </div>
+      {children}
+    </div>
+  );
+}
+
+type VendorMetricName =
+  | 'Vendor Score'
+  | 'SLA Compliance'
+  | 'First-Time Fix'
+  | 'Avg Resolution'
+  | 'Evidence Compliance'
+  | 'Active Contracts'
+  | 'Jobs Last 30d'
+  | 'Avg Cost/Job';
+
+type VendorMetricInsight = {
+  metricName: VendorMetricName;
+  valueLabel: string;
+  status: 'positive' | 'monitor' | 'critical';
+  summary: string;
+  rationale: string[];
+  interpretation: string;
+  recommendation: string;
+};
+
+type VendorCopilotAction = 'rfq' | 'compare' | 'background' | 'price' | 'negotiation';
+
+type VendorCopilotResult = {
+  action: VendorCopilotAction;
+  title: string;
+  status: string;
+  summary: string;
+  primaryCta: string;
+  sections: { title: string; lines: string[] }[];
+};
+
+type VendorResearchStep = 'vendor' | 'sources' | 'checks' | 'report';
+
+type VendorResearchCheckCategory =
+  | 'identity'
+  | 'compliance'
+  | 'ownership'
+  | 'financial'
+  | 'operational'
+  | 'reputation'
+  | 'hse'
+  | 'esg'
+  | 'cyber'
+  | 'references'
+  | 'contract';
+
+type VendorResearchWizardState = {
+  step: VendorResearchStep;
+  vendorName: string;
+  legalName: string;
+  website: string;
+  country: string;
+  registrationNumber: string;
+  serviceCategory: string;
+  contactName: string;
+  contactEmail: string;
+  currentScope: string;
+  targetScope: string;
+  publicUrls: string;
+  references: string;
+  notes: string;
+  documents: VendorSetupDocument[];
+  selectedChecks: VendorResearchCheckCategory[];
+};
+
+type VendorResearchSource = {
+  id: string;
+  type: 'VendorIQ' | 'URL' | 'Document' | 'Notes';
+  label: string;
+  detail: string;
+};
+
+type VendorResearchFinding = {
+  category: string;
+  status: 'Clear' | 'Watch' | 'Critical';
+  finding: string;
+  evidence: string;
+  action: string;
+};
+
+type VendorResearchReport = {
+  title: string;
+  status: string;
+  decision: 'Proceed' | 'Proceed with controls' | 'Do not proceed yet';
+  riskScore: number;
+  riskLevel: 'Low' | 'Medium' | 'High';
+  summary: string;
+  sourceBasis: VendorResearchSource[];
+  findings: VendorResearchFinding[];
+  requiredActions: string[];
+  missingDocuments: string[];
+  nextActions: string[];
+};
+
+type VendorActionPackStep = 'vendor' | 'outcome' | 'targets' | 'review';
+
+type VendorActionPackObjective = 'Operational recovery' | 'Commercial negotiation' | 'Compliance escalation';
+
+type VendorActionPackWizardState = {
+  step: VendorActionPackStep;
+  vendorId: string;
+  objective: VendorActionPackObjective;
+  urgency: 'High' | 'Medium' | 'Low';
+  owner: string;
+  audience: string;
+  responseDeadline: string;
+  slaTarget: number;
+  repeatFailureTarget: number;
+  evidenceTarget: number;
+  costGuardrail: number;
+  responseCadence: string;
+  recoveryNotes: string;
+};
+
+type VendorActionPackGenerated = {
+  vendorId: string;
+  vendorName: string;
+  title: string;
+  status: string;
+  objective: VendorActionPackObjective;
+  urgency: string;
+  summary: string;
+  managerSummary: string;
+  vendorNotice: string;
+  internalApprovalRoute: string[];
+  kpiTargets: { label: string; current: string; target: string }[];
+  localActionQueue: { title: string; owner: string; due: string; channel: string }[];
+  followUpTimeline: string[];
+  evidenceRequests: string[];
+  nextActions: string[];
+};
+
+function formatVendorAction(action: VendorCopilotAction): string {
+  return {
+    rfq: 'RFQ builder opened',
+    compare: 'Quote comparison intake opened',
+    background: 'Background check wizard opened',
+    price: 'Price analysis completed',
+    negotiation: 'Action pack prepared',
+  }[action];
+}
+
+function buildVendorCopilotResult(vendor: VendorIntelData, peers: VendorIntelData[], action: VendorCopilotAction): VendorCopilotResult {
+  const score = computeVendorScore(vendor);
+  const risk = classifyVendorRisk(score);
+  const peerAvgCost = Math.round(peers.reduce((sum, peer) => sum + peer.avgCostPerJob, 0) / Math.max(1, peers.length));
+  const costDelta = vendor.avgCostPerJob - peerAvgCost;
+  const dueDate = '7 working days';
+
+  if (action === 'rfq') {
+    return {
+      action,
+      title: 'RFQ builder',
+      status: 'Project anchor required',
+      summary: 'Start with the property, project, service category, and sourcing mode before generating the RFQ review package.',
+      primaryCta: 'Open RFQ wizard',
+      sections: [
+        {
+          title: 'Start with',
+          lines: [
+            'Select the property and project this procurement supports.',
+            `Confirm the service category, starting from ${vendor.category}.`,
+            'Choose whether to tell AI, use a template, or upload/paste scope documents.',
+          ],
+        },
+        {
+          title: 'Then define',
+          lines: [
+            'Scope, inclusions, exclusions, volumes, and delivery timeline.',
+            'SLA, evidence, compliance, insurance, HSE, and mobilisation requirements.',
+            'Editable scoring weights for price, SLA, quality, compliance, capacity, and risk.',
+          ],
+        },
+        {
+          title: 'Output',
+          lines: [
+            'A complete project-anchored RFQ package for review.',
+            'Copy RFQ, save to workbench, and prepare vendor invite actions.',
+            'No preloaded RFQ content is inserted; the package is built from user choices, typed scope, templates, or uploaded documents.',
+          ],
+        },
+      ],
+    };
+  }
+
+  if (action === 'compare') {
+    return {
+      action,
+      title: 'Assigned RFQ quote intake',
+      status: 'Procurement context required',
+      summary: 'Start by assigning the property, project, and procurement package. AI compares uploaded supplier quotes, including price, rate-card, and value signals, against that selected package context.',
+      primaryCta: 'Open assigned intake',
+      sections: [
+        {
+          title: 'Step 1 - assign context',
+          lines: [
+            'Select the property and project this procurement decision belongs to.',
+            'Choose the package or scope, such as Facade Systems, MEP, Elevators, Fire Systems, or Fit-out.',
+            'Confirm package budget, required delivery or award deadline, and evaluation basis.',
+          ],
+        },
+        {
+          title: 'Step 2 - upload quote data',
+          lines: [
+            'Upload actual PDF, DOC, XLSX, CSV, or TXT quote files.',
+            'Paste quote text manually only when a scanned or locked file has no readable text.',
+            'Missing price, SLA, delivery, warranty, exclusions, or evidence commitments stay visible as clarification needs.',
+          ],
+        },
+        {
+          title: 'Step 3 - compare and act',
+          lines: [
+            'Rank submitted supplier quotes against price, budget, delivery date, evidence rules, compliance criteria, and value guardrails.',
+            'Prepare an award brief, clarification request, negotiation points, or ProjectCommand link.',
+            'Only submitted quote data is used in the comparison.',
+          ],
+        },
+      ],
+    };
+  }
+
+  if (action === 'background') {
+    return {
+      action,
+      title: 'Vendor due diligence intake',
+      status: 'Research inputs required',
+      summary: `Start a structured background check for ${vendor.name}. Add vendor details, public-source URLs, documents, notes, and check categories before generating the due diligence report.`,
+      primaryCta: 'Open background check wizard',
+      sections: [
+        {
+          title: 'Vendor inputs',
+          lines: [
+            'Confirm legal name, website, country, registration, service category, contact, and target scope.',
+            'Add source URLs, uploaded documents, pasted notes, and known references.',
+            'Choose the due-diligence categories to include in the report.',
+          ],
+        },
+        {
+          title: 'Report coverage',
+          lines: [
+            'Executive decision, risk score, identity, compliance, ownership, financial, operational, reputation, HSE, ESG, cyber, references, and contract risk.',
+            'Findings are based on user-provided sources, uploaded readable text, and VendorIQ performance data.',
+            'No live web scraping or backend research is triggered in this version.',
+          ],
+        },
+        {
+          title: 'Output actions',
+          lines: [
+            'Copy report, save to workbench, request missing documents, prepare review checklist, or open vendor profile.',
+            'Saved reports update the Procurement Copilot workbench.',
+            'Follow-up actions remain visible before award or renewal.',
+          ],
+        },
+      ],
+    };
+  }
+
+  if (action === 'price') {
+    const annualizedOpportunity = Math.max(0, costDelta) * Math.max(1, vendor.jobsLast30d) * 12;
+    return {
+      action,
+      title: 'Price and value analysis',
+      status: costDelta > 0 ? `Potential annual saving: AED ${annualizedOpportunity.toLocaleString()}` : 'Current pricing beats peer average',
+      summary: `Analysed average job cost against peer pricing and quality signals so price is not judged in isolation.`,
+      primaryCta: costDelta > 0 ? 'Open renegotiation brief' : 'Protect current rate card',
+      sections: [
+        {
+          title: 'Price position',
+          lines: [
+            `${vendor.name}: AED ${vendor.avgCostPerJob}/job.`,
+            `Peer average: AED ${peerAvgCost}/job.`,
+            costDelta > 0 ? `Premium: AED ${costDelta}/job.` : `Advantage: AED ${Math.abs(costDelta)}/job below peer average.`,
+          ],
+        },
+        {
+          title: 'Value guardrails',
+          lines: [
+            `First-time fix: ${vendor.firstTimeFixRate}%.`,
+            `SLA compliance: ${vendor.slaCompliance}%.`,
+            `Evidence compliance: ${vendor.evidenceCompliance}%.`,
+          ],
+        },
+        {
+          title: 'Recommendation',
+          lines: [
+            costDelta > 0 ? `Ask for a rate-card reduction toward AED ${peerAvgCost} while preserving SLA penalties.` : 'Do not push for lower price unless quality remains protected.',
+            'Separate labor, materials, emergency call-out, and repeat-visit pricing in the next commercial review.',
+            'Use avoidable repeat visits as a credit note trigger.',
+          ],
+        },
+      ],
+    };
+  }
+
+  return {
+    action,
+    title: 'Action pack builder',
+    status: 'Vendor and targets required',
+    summary: `Build an operational recovery pack for ${vendor.name} or switch to another vendor before generating.`,
+    primaryCta: 'Open action pack wizard',
+    sections: [
+      {
+        title: 'Vendor context',
+        lines: [
+          `${vendor.name}: ${score}/100, ${risk}.`,
+          `${vendor.slaCompliance}% SLA, ${vendor.evidenceCompliance}% evidence, ${vendor.repeatFailureRate}% repeat failures.`,
+          `Average cost is AED ${vendor.avgCostPerJob}/job versus peer average AED ${peerAvgCost}/job.`,
+        ],
+      },
+      {
+        title: 'Builder inputs',
+        lines: [
+          'Select the vendor and operational recovery objective.',
+          'Set urgency, owner, audience, and response deadline.',
+          'Edit SLA, repeat failure, evidence, cost, and response cadence targets.',
+        ],
+      },
+      {
+        title: 'Generated output',
+        lines: [
+          'Manager summary, vendor notice, internal approval route, KPI target table, and local action queue.',
+          'Evidence requests, follow-up timeline, and ready actions are generated after review.',
+          `Suggested response deadline: ${dueDate}.`,
+        ],
+      },
+    ],
+  };
+}
+
+function vendorMetricStatus(metricName: VendorMetricName, value: number, score: number): VendorMetricInsight['status'] {
+  if (metricName === 'Avg Resolution') {
+    if (value > 60) return 'critical';
+    if (value > 45) return 'monitor';
+    return 'positive';
+  }
+  if (metricName === 'Avg Cost/Job') {
+    if (value > 620) return 'critical';
+    if (value > 500) return 'monitor';
+    return 'positive';
+  }
+  if (metricName === 'Active Contracts' || metricName === 'Jobs Last 30d') return value > 0 ? 'positive' : 'monitor';
+  if (metricName === 'Vendor Score') {
+    if (score < 65) return 'critical';
+    if (score < 80) return 'monitor';
+    return 'positive';
+  }
+  if (value < 75) return 'critical';
+  if (value < 88) return 'monitor';
+  return 'positive';
+}
+
+function buildVendorMetricInsight(vendor: VendorIntelData, metricName: VendorMetricName): VendorMetricInsight {
+  const score = computeVendorScore(vendor);
+  const riskLevel = classifyVendorRisk(score);
+  const peerCost = Number(vendor.costTrend[vendor.costTrend.length - 1]?.peerAvg ?? 500);
+  const statusFrom = (value: number) => vendorMetricStatus(metricName, value, score);
+
+  switch (metricName) {
+    case 'Vendor Score':
+      return {
+        metricName,
+        valueLabel: `${score}/100`,
+        status: statusFrom(score),
+        summary: `${vendor.name} is scoring ${score}/100 and is currently classified as ${riskLevel}.`,
+        rationale: [
+          `The score blends SLA compliance (${vendor.slaCompliance}%), first-time fix (${vendor.firstTimeFixRate}%), response speed, evidence compliance (${vendor.evidenceCompliance}%), cost, and risk flags.`,
+          vendor.trend === 'up' ? 'The trend is improving, so recent delivery is strengthening the score.' : vendor.trend === 'down' ? 'The trend is declining, so recent delivery is pulling the score down.' : 'The trend is stable, with no major movement in the recent score curve.',
+          `${vendor.contractFlags.length} contract flag${vendor.contractFlags.length === 1 ? '' : 's'} and ${vendor.repeatFailureRate}% repeat failure rate are included in the risk reading.`,
+        ],
+        interpretation: score >= 80 ? 'This vendor is a reliable candidate for priority work and broader scope.' : score >= 65 ? 'The vendor remains usable, but targeted controls are needed before expanding scope.' : 'This vendor needs active management before more critical work is assigned.',
+        recommendation: score >= 80 ? 'Keep the vendor in preferred rotation and monitor whether the improving trend holds next month.' : score >= 65 ? 'Set a short corrective action plan focused on the weakest score driver.' : 'Limit new assignments, trigger review, and prepare backup capacity for critical jobs.',
+      };
+    case 'SLA Compliance':
+      return {
+        metricName,
+        valueLabel: `${vendor.slaCompliance}%`,
+        status: statusFrom(vendor.slaCompliance),
+        summary: `${vendor.name} is closing ${vendor.slaCompliance}% of jobs within SLA.`,
+        rationale: [
+          vendor.slaCompliance >= 90 ? 'SLA performance is above the preferred vendor threshold.' : 'SLA performance is below preferred threshold and needs closer scheduling control.',
+          `${vendor.jobsLast30d} jobs in the last 30 days gives the metric enough activity to be meaningful.`,
+          `The 30-day risk forecast is ${vendor.predictedRisk30d}%, so SLA should be read alongside predictive risk.`,
+        ],
+        interpretation: vendor.slaCompliance >= 90 ? 'Operationally, the vendor is dependable for time-sensitive work.' : 'Late delivery risk may create resident escalation and contract pressure.',
+        recommendation: vendor.slaCompliance >= 90 ? 'Keep allocating high-priority jobs while watching workload concentration.' : 'Review open jobs daily and reserve critical jobs for vendors with stronger SLA performance.',
+      };
+    case 'First-Time Fix':
+      return {
+        metricName,
+        valueLabel: `${vendor.firstTimeFixRate}%`,
+        status: statusFrom(vendor.firstTimeFixRate),
+        summary: `${vendor.firstTimeFixRate}% of jobs are resolved without a repeat visit.`,
+        rationale: [
+          `Repeat failure rate is ${vendor.repeatFailureRate}%, which is the inverse pressure on this metric.`,
+          vendor.firstTimeFixRate >= 88 ? 'Diagnostic quality is strong and return visits are rare.' : 'Repeat visits are creating avoidable operational load.',
+          `Current category focus: ${vendor.category}.`,
+        ],
+        interpretation: vendor.firstTimeFixRate >= 88 ? 'The vendor is diagnosing correctly and reducing friction for residents and site teams.' : 'More rework means longer lifecycle cost and less predictable capacity.',
+        recommendation: vendor.firstTimeFixRate >= 88 ? 'Use this vendor for complex jobs where diagnostic accuracy matters.' : 'Pair the vendor with clearer issue triage, stronger evidence requirements, or a senior reviewer.',
+      };
+    case 'Avg Resolution':
+      return {
+        metricName,
+        valueLabel: `${vendor.avgResolutionMin} min`,
+        status: statusFrom(vendor.avgResolutionMin),
+        summary: `Average resolution time is ${vendor.avgResolutionMin} minutes.`,
+        rationale: [
+          vendor.avgResolutionMin <= 45 ? 'Resolution speed is within the preferred operating band.' : 'Resolution speed is above the preferred operating band.',
+          `The metric is assessed together with ${vendor.slaCompliance}% SLA compliance and ${vendor.firstTimeFixRate}% first-time fix.`,
+          vendor.dependencyRisk === 'High' || vendor.dependencyRisk === 'Critical' ? `Dependency risk is ${vendor.dependencyRisk}, which can slow closure when specialist capacity is needed.` : 'Dependency risk is manageable, so speed is mostly within vendor control.',
+        ],
+        interpretation: vendor.avgResolutionMin <= 45 ? 'Fast closure supports SLA confidence and keeps active backlog low.' : 'Longer resolution times can hide capacity constraints or weak diagnosis.',
+        recommendation: vendor.avgResolutionMin <= 45 ? 'Maintain current dispatch rules and use the vendor for short-SLA work.' : 'Review job mix, parts availability, and escalation handoffs for the slowest closures.',
+      };
+    case 'Evidence Compliance':
+      return {
+        metricName,
+        valueLabel: `${vendor.evidenceCompliance}%`,
+        status: statusFrom(vendor.evidenceCompliance),
+        summary: `${vendor.evidenceCompliance}% of closed jobs include required documentation and evidence.`,
+        rationale: [
+          vendor.evidenceCompliance >= 90 ? 'Evidence quality is strong enough for audit and client reporting.' : 'Evidence gaps may weaken audit readiness and billing support.',
+          `${vendor.contractFlags.filter(flag => flag.type === 'missing').length} active missing-evidence flag${vendor.contractFlags.filter(flag => flag.type === 'missing').length === 1 ? '' : 's'} found in contract checks.`,
+          'Before/after photos and completion notes are key signals for this score.',
+        ],
+        interpretation: vendor.evidenceCompliance >= 90 ? 'The vendor is giving management a defensible record of completed work.' : 'Incomplete documentation creates avoidable review friction and compliance exposure.',
+        recommendation: vendor.evidenceCompliance >= 90 ? 'Keep current evidence standards and sample-check high-risk jobs.' : 'Make evidence mandatory before closure and spot-check the next 10 jobs.',
+      };
+    case 'Active Contracts':
+      return {
+        metricName,
+        valueLabel: String(vendor.activeContracts),
+        status: statusFrom(vendor.activeContracts),
+        summary: `${vendor.name} has ${vendor.activeContracts} active contract${vendor.activeContracts === 1 ? '' : 's'} in scope.`,
+        rationale: [
+          `Contract expiry is ${vendor.contractExpiry}.`,
+          `The vendor covers ${vendor.sites.length} site${vendor.sites.length === 1 ? '' : 's'}: ${vendor.sites.join(', ')}.`,
+          `${vendor.contractFlags.length} contract flag${vendor.contractFlags.length === 1 ? '' : 's'} currently influence governance risk.`,
+        ],
+        interpretation: vendor.activeContracts > 1 ? 'This vendor has meaningful operational footprint and should stay visible in portfolio controls.' : 'The vendor has a smaller active footprint, so risk is more contained.',
+        recommendation: vendor.contractFlags.length > 0 ? 'Review flagged clauses before assigning additional contract scope.' : 'Keep renewal, expiry, and scope coverage visible in the monthly vendor review.',
+      };
+    case 'Jobs Last 30d':
+      return {
+        metricName,
+        valueLabel: String(vendor.jobsLast30d),
+        status: statusFrom(vendor.jobsLast30d),
+        summary: `${vendor.name} completed or handled ${vendor.jobsLast30d} jobs in the last 30 days.`,
+        rationale: [
+          'Recent job volume gives confidence that the performance metrics reflect current behavior.',
+          `Workload is being delivered with ${vendor.slaCompliance}% SLA and ${vendor.firstTimeFixRate}% first-time fix.`,
+          vendor.jobsLast30d > 150 ? 'Volume is high, so capacity monitoring matters.' : 'Volume is moderate, so performance changes may be easier to correct quickly.',
+        ],
+        interpretation: vendor.jobsLast30d > 150 ? 'The vendor is a major operational dependency for current service delivery.' : 'The vendor is active but not over-concentrated.',
+        recommendation: vendor.jobsLast30d > 150 ? 'Watch fatigue, repeat visits, and SLA drift before adding more work.' : 'Use this activity level to test targeted performance improvements.',
+      };
+    case 'Avg Cost/Job':
+      return {
+        metricName,
+        valueLabel: `AED ${vendor.avgCostPerJob}`,
+        status: statusFrom(vendor.avgCostPerJob),
+        summary: `Average cost per job is AED ${vendor.avgCostPerJob}, compared with a peer reference of AED ${peerCost}.`,
+        rationale: [
+          vendor.avgCostPerJob <= peerCost ? `Cost is AED ${peerCost - vendor.avgCostPerJob} below the current peer reference.` : `Cost is AED ${vendor.avgCostPerJob - peerCost} above the current peer reference.`,
+          `Cost should be read with ${vendor.firstTimeFixRate}% first-time fix, because cheap repeat work is not truly efficient.`,
+          `Vendor score is ${score}/100, so cost efficiency is being achieved ${score >= 80 ? 'without weakening quality.' : 'with some quality or delivery risk still present.'}`,
+        ],
+        interpretation: vendor.avgCostPerJob <= peerCost && vendor.firstTimeFixRate >= 85 ? 'The vendor is cost-efficient without obvious quality compromise.' : 'Cost requires a quality check before decisions are made on price alone.',
+        recommendation: vendor.avgCostPerJob <= peerCost ? 'Keep this vendor in cost-sensitive routing while monitoring evidence and repeat visits.' : 'Compare job mix and parts usage before renegotiating rates.',
+      };
+  }
+}
+
+function VendorAIInsightBadge({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={event => {
+        event.stopPropagation();
+        onClick();
+      }}
+      title="Explain this metric"
+      aria-label="Explain this metric"
+      className="group absolute right-2 top-2 z-10 inline-flex h-5 items-center gap-1 rounded-full border border-violet-300/25 bg-[linear-gradient(135deg,#1D7CFF,#7C3AED)] px-1.5 text-[8px] font-black uppercase tracking-wide text-white shadow-[0_0_14px_rgba(124,58,237,0.34)] transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-violet-300/70"
+    >
+      <Sparkles size={9} />
+      AI
+      <span className="pointer-events-none absolute right-0 top-7 hidden whitespace-nowrap rounded-lg border border-[rgba(46,127,255,0.28)] bg-[#07111F] px-2.5 py-1.5 text-[10px] font-bold normal-case tracking-normal text-[#DDE6F8] shadow-xl group-hover:block">
+        Explain this metric
+      </span>
+    </button>
+  );
+}
+
+function VendorInsightBlock({
+  icon: Icon,
+  title,
+  children,
+}: {
+  icon: typeof Brain;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-xl border border-[rgba(46,127,255,0.16)] bg-[#07111F]/85 p-4">
+      <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.16em] text-[#C4B5FD]">
+        <Icon size={13} />
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function VendorMetricInsightPanel({ insight, onClose }: { insight: VendorMetricInsight; onClose: () => void }) {
+  const statusClass = {
+    positive: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200',
+    monitor: 'border-amber-400/30 bg-amber-400/10 text-amber-200',
+    critical: 'border-red-400/30 bg-red-400/10 text-red-200',
+  }[insight.status];
+
+  return (
+    <motion.aside
+      initial={{ x: 420, opacity: 0 }}
+      animate={{ x: 0, opacity: 1 }}
+      exit={{ x: 420, opacity: 0 }}
+      transition={{ type: 'spring', stiffness: 300, damping: 34 }}
+      className="absolute bottom-0 right-0 top-0 z-40 flex w-full max-w-[400px] flex-col border-l border-violet-400/25 bg-[linear-gradient(180deg,rgba(10,22,40,0.98),rgba(7,17,31,0.99))] shadow-2xl shadow-black/45 backdrop-blur-xl"
+    >
+      <div className="border-b border-[rgba(46,127,255,0.16)] p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-violet-300/25 bg-violet-400/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-violet-100">
+              <Sparkles size={12} />
+              AI Insight
+            </div>
+            <h3 className="text-lg font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
+              AI Insight - {insight.metricName}
+            </h3>
+            <p className="mt-1 text-[12px] text-[#7A94B4]">
+              Current value: <span className="font-bold text-[#DDE6F8]">{insight.valueLabel}</span>
+            </p>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-2 text-[#7A94B4] transition-colors hover:bg-white/5 hover:text-white" aria-label="Close AI insight">
+            <X size={18} />
+          </button>
+        </div>
+        <div className={`mt-4 inline-flex rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-wide ${statusClass}`}>
+          {insight.status === 'positive' ? 'Healthy signal' : insight.status === 'monitor' ? 'Monitor closely' : 'Needs attention'}
+        </div>
+      </div>
+
+      <div className="custom-scrollbar flex-1 space-y-3 overflow-y-auto p-5">
+        <VendorInsightBlock icon={Brain} title="Summary">
+          <p className="text-[13px] leading-6 text-[#DDE6F8]">{insight.summary}</p>
+        </VendorInsightBlock>
+        <VendorInsightBlock icon={ListChecks} title="Rationale">
+          <ul className="space-y-2">
+            {insight.rationale.map(item => (
+              <li key={item} className="flex gap-2 text-[12px] leading-5 text-[#B8C7DB]">
+                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[#7C3AED]" />
+                {item}
+              </li>
+            ))}
+          </ul>
+        </VendorInsightBlock>
+        <VendorInsightBlock icon={Activity} title="Interpretation">
+          <p className="text-[13px] leading-6 text-[#DDE6F8]">{insight.interpretation}</p>
+        </VendorInsightBlock>
+        <VendorInsightBlock icon={Lightbulb} title="Recommendation">
+          <p className="text-[13px] leading-6 text-[#DDE6F8]">{insight.recommendation}</p>
+        </VendorInsightBlock>
+      </div>
+    </motion.aside>
+  );
+}
+
+function VendorCopilotWorkbench({
+  result,
+  log,
+  onRun,
+  onOpenQuoteIntake,
+  onOpenRfqWizard,
+  onOpenBackgroundCheck,
+  onOpenActionPack,
+}: {
+  result: VendorCopilotResult;
+  log: string[];
+  onRun: (action: VendorCopilotAction) => void;
+  onOpenQuoteIntake?: () => void;
+  onOpenRfqWizard?: () => void;
+  onOpenBackgroundCheck?: () => void;
+  onOpenActionPack?: () => void;
+}) {
+  const actions: { id: VendorCopilotAction; label: string; detail: string; tone: string; icon: React.ReactNode }[] = [
+    { id: 'rfq', label: 'Write RFQ', detail: 'Scope, questions, scoring, and evidence rules', tone: 'border-blue-400/30 bg-blue-400/10 text-blue-200', icon: <FileWarning size={13} /> },
+    { id: 'compare', label: 'Compare Quotes', detail: 'Price, value, delivery, and bid ranking', tone: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200', icon: <BarChart3 size={13} /> },
+    { id: 'background', label: 'Background Checks', detail: 'Contracts, evidence, risk, and dependency', tone: 'border-violet-400/30 bg-violet-400/10 text-violet-200', icon: <ShieldCheck size={13} /> },
+    { id: 'negotiation', label: 'Action Pack', detail: 'Recovery actions and KPI targets', tone: 'border-red-400/30 bg-red-400/10 text-red-200', icon: <Target size={13} /> },
+  ];
+
+  return (
+    <div className="grid gap-3 lg:grid-cols-[0.95fr_1.25fr]">
+      <div className="space-y-3">
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
+          {actions.map(action => (
+            <button
+              key={action.id}
+              type="button"
+              onClick={() => {
+                if (action.id === 'rfq' && onOpenRfqWizard) {
+                  onOpenRfqWizard();
+                  return;
+                }
+                if (action.id === 'background' && onOpenBackgroundCheck) {
+                  onOpenBackgroundCheck();
+                  return;
+                }
+                if (action.id === 'negotiation' && onOpenActionPack) {
+                  onOpenActionPack();
+                  return;
+                }
+                onRun(action.id);
+                if (action.id === 'compare') onOpenQuoteIntake?.();
+              }}
+              className={`group rounded-xl border p-3 text-left transition-all hover:-translate-y-0.5 hover:border-white/30 ${action.tone}`}
+            >
+              <div className="flex items-center gap-2">
+                <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-black/18">{action.icon}</span>
+                <span className="text-[12px] font-black text-[#EEF3FA]">{action.label}</span>
+                <ChevronRight size={13} className="ml-auto opacity-60 transition-transform group-hover:translate-x-0.5" />
+              </div>
+              <div className="mt-2 text-[10px] leading-4 text-[#9CB1CC]">{action.detail}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-[rgba(46,127,255,0.18)] bg-[#0D1E3A] p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[rgba(46,127,255,0.12)] pb-3">
+          <div>
+            <h4 className="text-sm font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{result.title}</h4>
+            <p className="mt-1 text-[11px] leading-5 text-[#8AA6C8]">{result.summary}</p>
+          </div>
+          <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-[10px] font-black text-emerald-200">
+            {result.status}
+          </span>
+        </div>
+
+        <div className="mt-3 space-y-3">
+          {result.sections.map(section => (
+            <div key={section.title} className="rounded-xl border border-[rgba(46,127,255,0.12)] bg-[#07111F] p-3">
+              <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">
+                <ListChecks size={12} />
+                {section.title}
+              </div>
+              <ul className="space-y-2">
+                {section.lines.map(line => (
+                  <li key={line} className="flex gap-2 text-[11px] leading-5 text-[#C8D8EE]">
+                    <CheckCircle size={11} className="mt-1 shrink-0 text-emerald-400" />
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#2E7FFF]/20 bg-[#2E7FFF]/10 p-3">
+          <div>
+            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Next action</div>
+            <div className="mt-1 text-[12px] font-bold text-[#EEF3FA]">{result.primaryCta}</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (result.action === 'rfq' && onOpenRfqWizard) {
+                onOpenRfqWizard();
+                return;
+              }
+              if (result.action === 'background' && onOpenBackgroundCheck) {
+                onOpenBackgroundCheck();
+                return;
+              }
+              if (result.action === 'negotiation' && onOpenActionPack) {
+                onOpenActionPack();
+                return;
+              }
+              onRun(result.action);
+            }}
+            className="rounded-lg bg-[#2E7FFF] px-3 py-2 text-[11px] font-black text-white transition-all hover:bg-[#4B91FF]"
+          >
+            {result.action === 'rfq' ? 'Open RFQ Wizard' : result.action === 'background' ? 'Open Background Wizard' : result.action === 'negotiation' ? 'Open Action Pack' : 'Refresh artifact'}
+          </button>
+        </div>
+
+        {result.action === 'compare' && onOpenQuoteIntake && (
+          <button
+            type="button"
+            onClick={onOpenQuoteIntake}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-400/12 px-4 py-3 text-[12px] font-black text-emerald-100 transition-all hover:border-emerald-300/50 hover:bg-emerald-400/18"
+          >
+            <UploadCloud size={14} />
+            Open assigned quote intake
+          </button>
+        )}
+
+        <div className="mt-3 rounded-xl border border-[rgba(46,127,255,0.12)] bg-[#07111F] p-3">
+          <div className="mb-2 text-[10px] font-black uppercase tracking-[0.16em] text-[#7A94B4]">Copilot activity</div>
+          <div className="space-y-1.5">
+            {log.slice(0, 4).map(item => (
+              <div key={item} className="flex items-center gap-2 text-[10px] text-[#9CB1CC]">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#2E7FFF]" />
+                {item}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function inferVendorCopilotAction(prompt: string): VendorCopilotAction {
+  const lower = prompt.toLowerCase();
+  if (lower.includes('rfq') || lower.includes('scope') || lower.includes('tender')) return 'rfq';
+  if (lower.includes('background') || lower.includes('check') || lower.includes('compliance') || lower.includes('documents')) return 'background';
+  if (lower.includes('price') || lower.includes('cost') || lower.includes('saving') || lower.includes('rate')) return 'compare';
+  if (lower.includes('action') || lower.includes('negotiate') || lower.includes('corrective') || lower.includes('email')) return 'negotiation';
+  return 'compare';
+}
+
+function PageProcurementCopilotModal({
+  focusVendor,
+  vendors,
+  result,
+  onClose,
+  onRun,
+  onOpenProfile,
+  onRfqGenerated,
+  onBackgroundGenerated,
+  onActionPackGenerated,
+  allowVendorSwitch = false,
+}: {
+  focusVendor: VendorIntelData;
+  vendors: VendorIntelData[];
+  result: VendorCopilotResult;
+  onClose: () => void;
+  onRun: (action: VendorCopilotAction) => void;
+  onOpenProfile: (vendor?: VendorIntelData) => void;
+  onRfqGenerated?: (result: VendorCopilotResult) => void;
+  onBackgroundGenerated?: (result: VendorCopilotResult) => void;
+  onActionPackGenerated?: (result: VendorCopilotResult, vendor: VendorIntelData) => void;
+  allowVendorSwitch?: boolean;
+}) {
+  const selectedProjectData = useSelectedProjectCommandData();
+  const propertyOptions = useProjectCommandPropertyOptions();
+  const rfqTemplates = buildRfqTemplates();
+  const [prompt, setPrompt] = useState('');
+  const [isListening, setIsListening] = useState(false);
+  const [assistantNote, setAssistantNote] = useState(`Ready for ${focusVendor.name}. Choose an outcome or describe the procurement task.`);
+  const [quoteDocuments, setQuoteDocuments] = useState<VendorSetupDocument[]>([]);
+  const [quoteNotes, setQuoteNotes] = useState('');
+  const [quoteAnalysis, setQuoteAnalysis] = useState<QuoteAnalysis | null>(null);
+  const [quoteActionArtifact, setQuoteActionArtifact] = useState<QuoteActionArtifact | null>(null);
+  const [quoteReportFeedback, setQuoteReportFeedback] = useState('');
+  const [quoteStep, setQuoteStep] = useState<QuoteWorkbenchStep>('context');
+  const [rfqState, setRfqState] = useState<RfqWizardState>(() => buildInitialRfqState(focusVendor, selectedProjectData));
+  const [rfqPackage, setRfqPackage] = useState<RfqGeneratedPackage | null>(null);
+  const [rfqFeedback, setRfqFeedback] = useState('');
+  const rfqReviewRef = useRef<HTMLDivElement | null>(null);
+  const [researchState, setResearchState] = useState<VendorResearchWizardState>(() => buildInitialVendorResearchState(focusVendor));
+  const [researchReport, setResearchReport] = useState<VendorResearchReport | null>(null);
+  const [researchFeedback, setResearchFeedback] = useState('');
+  const researchReportRef = useRef<HTMLDivElement | null>(null);
+  const [actionPackState, setActionPackState] = useState<VendorActionPackWizardState>(() => buildInitialActionPackState(focusVendor));
+  const [actionPack, setActionPack] = useState<VendorActionPackGenerated | null>(null);
+  const [actionPackFeedback, setActionPackFeedback] = useState('');
+  const actionPackReviewRef = useRef<HTMLDivElement | null>(null);
+  const allProjectOptions = useProjectCommandProjectOptions();
+  const projectOptions = useProjectCommandProjectOptions(rfqState.anchor.propertyId);
+  const defaultQuotePackage = procurementPackageTemplates[0];
+  const [quoteAssignment, setQuoteAssignment] = useState<ProcurementAssignmentContext>(() => ({
+    propertyId: selectedProjectData.property.id,
+    propertyName: selectedProjectData.property.name,
+    projectId: selectedProjectData.project.id,
+    projectName: selectedProjectData.project.name,
+    packageName: defaultQuotePackage.name,
+    budgetAllowance: defaultQuotePackage.budgetAllowance,
+    requiredDeliveryDate: defaultQuotePackage.requiredDeliveryDate,
+    evaluationCriteria: defaultQuotePackage.evaluationCriteria,
+    evidenceRequirements: defaultQuotePackage.evidenceRequirements,
+  }));
+  const quoteProjectOptions = allProjectOptions.filter(option => option.propertyId === quoteAssignment.propertyId);
+  const quoteAssignmentComplete = Boolean(
+    quoteAssignment.propertyId
+    && quoteAssignment.projectId
+    && quoteAssignment.packageName
+    && quoteAssignment.budgetAllowance > 0
+    && quoteAssignment.requiredDeliveryDate,
+  );
+  const actionPackVendor = vendors.find(vendor => vendor.id === actionPackState.vendorId) ?? focusVendor;
+  const actionPackScore = computeVendorScore(actionPackVendor);
+  const actionPackRisk = classifyVendorRisk(actionPackScore);
+  const actionPackStepOrder: VendorActionPackStep[] = ['vendor', 'outcome', 'targets', 'review'];
+  const actionPackCurrentStepIndex = actionPackStepOrder.indexOf(actionPackState.step);
+  const canGenerateActionPack = Boolean(actionPackState.vendorId && actionPackState.owner.trim() && actionPackState.responseDeadline.trim() && actionPackState.slaTarget > 0 && actionPackState.evidenceTarget > 0);
+  const chips: { label: string; detail: string; action: VendorCopilotAction; icon: React.ReactNode }[] = [
+    { label: 'Draft RFQ', detail: 'Scope, criteria, evidence, deadlines', action: 'rfq', icon: <FileWarning size={15} /> },
+    { label: 'Compare Quotes', detail: 'Price, value, delivery, bid ranking', action: 'compare', icon: <BarChart3 size={15} /> },
+    { label: 'Run Checks', detail: 'Compliance, documents, dependency', action: 'background', icon: <ShieldCheck size={15} /> },
+    { label: 'Prepare Action Pack', detail: 'Recovery actions and KPI targets', action: 'negotiation', icon: <Target size={15} /> },
+  ];
+
+  function run(action: VendorCopilotAction) {
+    onRun(action);
+    setAssistantNote(action === 'compare'
+      ? 'Upload or paste vendor quotes, then run the comparison to get ranked findings and a recommended winner.'
+      : action === 'background'
+        ? 'Add vendor details, URLs, documents, and selected checks, then generate the due diligence report.'
+        : action === 'negotiation'
+          ? 'Choose the vendor, recovery objective, urgency, owner, and KPI targets before generating the action pack.'
+      : `${formatVendorAction(action)}. The live work product is updated on the right and on the page workbench behind this modal.`);
+    setPrompt('');
+  }
+
+  function submitPrompt() {
+    const action = inferVendorCopilotAction(prompt);
+    run(action);
+  }
+
+  function patchQuoteAssignment(patch: Partial<ProcurementAssignmentContext>) {
+    setQuoteAssignment(prev => ({ ...prev, ...patch }));
+    setQuoteAnalysis(null);
+    setQuoteActionArtifact(null);
+    setQuoteReportFeedback('');
+    setQuoteStep('context');
+  }
+
+  function changeQuoteProperty(propertyId: string) {
+    const property = propertyOptions.find(option => option.id === propertyId);
+    const nextProject = allProjectOptions.find(option => option.propertyId === propertyId);
+    patchQuoteAssignment({
+      propertyId,
+      propertyName: property?.label ?? quoteAssignment.propertyName,
+      projectId: nextProject?.id ?? '',
+      projectName: nextProject?.label ?? '',
+    });
+  }
+
+  function changeQuoteProject(projectId: string) {
+    const project = allProjectOptions.find(option => option.id === projectId);
+    patchQuoteAssignment({
+      projectId,
+      projectName: project?.label ?? quoteAssignment.projectName,
+      propertyId: project?.propertyId ?? quoteAssignment.propertyId,
+      propertyName: project?.propertyName ?? quoteAssignment.propertyName,
+    });
+  }
+
+  function changeQuotePackage(packageName: string) {
+    const template = procurementPackageTemplates.find(item => item.name === packageName) ?? procurementPackageTemplates[0];
+    patchQuoteAssignment({
+      packageName,
+      budgetAllowance: template.budgetAllowance,
+      requiredDeliveryDate: template.requiredDeliveryDate,
+      evaluationCriteria: template.evaluationCriteria,
+      evidenceRequirements: template.evidenceRequirements,
+    });
+  }
+
+  async function addQuoteDocuments(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    if (!quoteAssignmentComplete) {
+      setAssistantNote('Assign the quote comparison to a property, project, and procurement package before uploading quote files.');
+      event.target.value = '';
+      return;
+    }
+    if (!files.length) return;
+    const docs = await Promise.all(files.map(async file => {
+      const parsed = await parseProjectDocumentFile(file).catch(() => null);
+      return {
+        id: `${file.name}-${file.size}-${Date.now()}`,
+        name: file.name,
+        type: file.type || 'Quote document',
+        sizeLabel: formatDocumentSize(file.size),
+        content: parsed?.text ?? '',
+        warning: parsed?.warning,
+      };
+    }));
+    const nextDocuments = [...docs, ...quoteDocuments].slice(0, 8);
+    setQuoteDocuments(nextDocuments);
+    setQuoteAnalysis(buildQuoteAnalysis(nextDocuments, quoteNotes, quoteAssignment));
+    setQuoteActionArtifact(null);
+    setQuoteReportFeedback('');
+    setQuoteStep('upload');
+    onRun('compare');
+    event.target.value = '';
+  }
+
+  function analyseQuotes() {
+    if (!quoteAssignmentComplete || (quoteDocuments.length === 0 && !quoteNotes.trim())) return;
+    const analysis = buildQuoteAnalysis(quoteDocuments, quoteNotes, quoteAssignment);
+    setQuoteAnalysis(analysis);
+    setQuoteActionArtifact(null);
+    setQuoteReportFeedback('');
+    setQuoteStep('comparison');
+    onRun('compare');
+    setAssistantNote(`${analysis.winner.vendorName} is currently recommended. Review the findings, exclusions, and next action before award.`);
+  }
+
+  function clearQuoteIntake() {
+    setQuoteDocuments([]);
+    setQuoteNotes('');
+    setQuoteAnalysis(null);
+    setQuoteActionArtifact(null);
+    setQuoteReportFeedback('');
+    setQuoteStep(quoteAssignmentComplete ? 'upload' : 'context');
+    setAssistantNote('Quote comparison reset. Upload or paste new quotes to analyse again.');
+  }
+
+  function patchResearch(patch: Partial<VendorResearchWizardState>) {
+    const isStepOnly = Object.keys(patch).length === 1 && patch.step;
+    setResearchState(prev => ({ ...prev, ...patch }));
+    if (!isStepOnly) {
+      setResearchReport(null);
+      setResearchFeedback('');
+    }
+  }
+
+  function toggleResearchCheck(category: VendorResearchCheckCategory) {
+    setResearchState(prev => ({
+      ...prev,
+      selectedChecks: prev.selectedChecks.includes(category)
+        ? prev.selectedChecks.filter(item => item !== category)
+        : [...prev.selectedChecks, category],
+    }));
+    setResearchReport(null);
+    setResearchFeedback('');
+  }
+
+  async function addResearchDocuments(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    if (!files.length) return;
+    const docs = await Promise.all(files.map(async file => {
+      const parsed = await parseProjectDocumentFile(file).catch(() => null);
+      return {
+        id: `${file.name}-${file.size}-${Date.now()}`,
+        name: file.name,
+        type: file.type || 'Research document',
+        sizeLabel: formatDocumentSize(file.size),
+        content: parsed?.text ?? '',
+        warning: parsed?.warning,
+      };
+    }));
+    setResearchState(prev => ({ ...prev, documents: [...docs, ...prev.documents].slice(0, 10) }));
+    setResearchReport(null);
+    setResearchFeedback('');
+    event.target.value = '';
+  }
+
+  function generateVendorResearchReport() {
+    const report = buildVendorResearchReport(focusVendor, vendors, researchState);
+    setResearchReport(report);
+    setResearchState(prev => ({ ...prev, step: 'report' }));
+    onBackgroundGenerated?.(buildBackgroundCopilotResult(report));
+    onRun('background');
+    setAssistantNote('Due diligence report generated. Review the decision, findings, source basis, and required follow-up actions.');
+    setResearchFeedback('Report generated. Review the decision, findings, source basis, and follow-up actions.');
+    window.setTimeout(() => {
+      researchReportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
+  }
+
+  function runResearchAction(action: string) {
+    if (!researchReport) return;
+    if (action === 'Copy report') {
+      void navigator.clipboard?.writeText(formatVendorResearchReportText(researchReport));
+      setResearchFeedback('Background report copied for review.');
+      return;
+    }
+    if (action === 'Save to workbench') {
+      onBackgroundGenerated?.(buildBackgroundCopilotResult(researchReport));
+      setResearchFeedback('Background report saved to the Procurement Copilot workbench.');
+      return;
+    }
+    if (action === 'Open vendor profile') {
+      onOpenProfile();
+      return;
+    }
+    setResearchFeedback(action === 'Request missing documents'
+      ? 'Missing document request prepared from due diligence findings.'
+      : 'Review checklist prepared from selected due diligence categories.');
+  }
+
+  function patchActionPack(patch: Partial<VendorActionPackWizardState>) {
+    const isStepOnly = Object.keys(patch).length === 1 && patch.step;
+    setActionPackState(prev => ({ ...prev, ...patch }));
+    if (!isStepOnly) {
+      setActionPack(null);
+      setActionPackFeedback('');
+    }
+  }
+
+  function changeActionPackVendor(vendorId: string) {
+    const nextVendor = vendors.find(vendor => vendor.id === vendorId);
+    if (!nextVendor) return;
+    setActionPackState(prev => ({ ...buildInitialActionPackState(nextVendor), step: prev.step }));
+    setActionPack(null);
+    setActionPackFeedback('');
+    setAssistantNote(`Action pack target changed to ${nextVendor.name}. Review objective and KPI targets before generating.`);
+  }
+
+  function generateVendorActionPack() {
+    const pack = buildVendorActionPack(actionPackVendor, vendors, actionPackState);
+    setActionPack(pack);
+    setActionPackState(prev => ({ ...prev, step: 'review' }));
+    onRun('negotiation');
+    onActionPackGenerated?.(buildActionPackCopilotResult(pack), actionPackVendor);
+    setAssistantNote('Action pack generated. Review the manager summary, vendor notice, KPI targets, and local action queue.');
+    setActionPackFeedback('Action pack generated and ready to review.');
+    window.setTimeout(() => {
+      actionPackReviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
+  }
+
+  function runActionPackAction(action: string) {
+    if (!actionPack) return;
+    if (action === 'Copy action pack') {
+      void navigator.clipboard?.writeText(formatVendorActionPackText(actionPack));
+      setActionPackFeedback('Action pack copied with selected vendor, objective, and KPI targets.');
+      return;
+    }
+    if (action === 'Save to workbench') {
+      onActionPackGenerated?.(buildActionPackCopilotResult(actionPack), actionPackVendor);
+      setActionPackFeedback('Action pack saved to the Procurement Copilot workbench.');
+      return;
+    }
+    if (action === 'Open vendor profile') {
+      onOpenProfile(actionPackVendor);
+      return;
+    }
+    setActionPackFeedback(action === 'Prepare vendor notice'
+      ? 'Vendor notice prepared from the current action pack.'
+      : 'Follow-up tasks prepared from the local action queue.');
+  }
+
+  function prepareQuoteAction(action: string) {
+    if (action === 'Open Vendor Profile') {
+      onOpenProfile();
+      return;
+    }
+    if (!quoteAnalysis) return;
+    setQuoteActionArtifact(buildQuoteActionArtifact(action, quoteAnalysis));
+  }
+
+  function downloadQuoteReport() {
+    if (!quoteAnalysis) return;
+    const filename = `${safeDownloadName(quoteAnalysis.assignment.packageName)}-quote-comparison-${new Date().toISOString().slice(0, 10)}.txt`;
+    downloadTextFile(filename, formatQuoteComparisonReportText(quoteAnalysis));
+    setQuoteReportFeedback('Full report prepared for download. If the browser blocks downloads, use Copy report as the backup.');
+    setAssistantNote('Full quote comparison report downloaded. The on-screen view stays as the executive preview.');
+  }
+
+  function copyQuoteReport() {
+    if (!quoteAnalysis) return;
+    void navigator.clipboard?.writeText(formatQuoteComparisonReportText(quoteAnalysis));
+    setQuoteReportFeedback('Full report copied for manager review.');
+    setAssistantNote('Full quote comparison report copied for manager review.');
+  }
+
+  function patchRfq(patch: Partial<RfqWizardState>) {
+    const isStepOnly = Object.keys(patch).length === 1 && patch.step;
+    setRfqState(prev => ({ ...prev, ...patch }));
+    if (!isStepOnly) {
+      setRfqPackage(null);
+      setRfqFeedback('');
+    }
+  }
+
+  function patchRfqAnchor(patch: Partial<RfqAnchor>) {
+    setRfqState(prev => ({ ...prev, anchor: { ...prev.anchor, ...patch } }));
+    setRfqPackage(null);
+    setRfqFeedback('');
+  }
+
+  function patchRfqScoring(key: RfqScoringKey, value: string) {
+    setRfqState(prev => ({ ...prev, scoring: { ...prev.scoring, [key]: value } }));
+    setRfqPackage(null);
+    setRfqFeedback('');
+  }
+
+  function changeRfqProperty(propertyId: string) {
+    const property = propertyOptions.find(option => option.id === propertyId);
+    const nextProject = allProjectOptions.find(option => option.propertyId === propertyId);
+    patchRfqAnchor({
+      propertyId,
+      propertyName: property?.label ?? rfqState.anchor.propertyName,
+      propertyMeta: property ? `${property.type} / ${property.location}` : rfqState.anchor.propertyMeta,
+      projectId: nextProject?.id ?? '',
+      projectName: nextProject?.label ?? '',
+      projectType: nextProject?.projectType ?? '',
+    });
+  }
+
+  function changeRfqProject(projectId: string) {
+    const project = projectOptions.find(option => option.id === projectId);
+    patchRfqAnchor({
+      projectId,
+      projectName: project?.label ?? rfqState.anchor.projectName,
+      projectType: project?.projectType ?? rfqState.anchor.projectType,
+      propertyId: project?.propertyId ?? rfqState.anchor.propertyId,
+      propertyName: project?.propertyName ?? rfqState.anchor.propertyName,
+    });
+  }
+
+  function changeRfqServiceCategory(serviceCategory: string) {
+    const relevantTemplates = relevantRfqTemplates(rfqTemplates, serviceCategory);
+    setRfqState(prev => {
+      const currentTemplate = rfqTemplates.find(item => item.id === prev.templateId);
+      const shouldKeepTemplate = Boolean(currentTemplate && currentTemplate.category === serviceCategory);
+      const autoTemplate = prev.mode === 'template' && !shouldKeepTemplate && relevantTemplates.length === 1
+        ? relevantTemplates[0]
+        : undefined;
+      const baseState: RfqWizardState = {
+        ...prev,
+        anchor: { ...prev.anchor, serviceCategory },
+      };
+
+      if (shouldKeepTemplate) return baseState;
+      if (autoTemplate) return applyRfqTemplate(baseState, autoTemplate);
+
+      return {
+        ...baseState,
+        templateId: '',
+        services: '',
+        sla: '',
+        compliance: '',
+        scoring: defaultRfqScoring(),
+      };
+    });
+    setRfqPackage(null);
+    setRfqFeedback('');
+  }
+
+  function changeRfqTemplate(templateId: string) {
+    const template = rfqTemplates.find(item => item.id === templateId);
+    if (!template) return;
+    setRfqState(prev => applyRfqTemplate(prev, template));
+    setRfqPackage(null);
+    setRfqFeedback('');
+  }
+
+  function chooseRfqMode(mode: RfqCreationMode) {
+    if (mode === 'template') {
+      const relevantTemplates = relevantRfqTemplates(rfqTemplates, rfqState.anchor.serviceCategory);
+      if (relevantTemplates.length === 1) {
+        setRfqState(prev => ({ ...applyRfqTemplate(prev, relevantTemplates[0]), mode, step: 'scope' }));
+        setRfqPackage(null);
+        setRfqFeedback('');
+        return;
+      }
+    }
+    patchRfq({ mode, step: mode === 'template' && !rfqState.templateId ? 'mode' : 'scope' });
+  }
+
+  async function addRfqDocuments(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    if (!files.length) return;
+    const docs = await Promise.all(files.map(async file => {
+      const parsed = await parseProjectDocumentFile(file).catch(() => null);
+      return {
+        id: `${file.name}-${file.size}-${Date.now()}`,
+        name: file.name,
+        type: file.type || 'Scope document',
+        sizeLabel: formatDocumentSize(file.size),
+        content: parsed?.text ?? '',
+        warning: parsed?.warning,
+      };
+    }));
+    setRfqState(prev => {
+      const nextDocuments = [...docs, ...prev.documents].slice(0, 8);
+      const extracted = extractRfqScopeFromDocuments(nextDocuments, prev.pastedScope);
+      return {
+        ...prev,
+        documents: nextDocuments,
+        services: prev.services || extracted.services || '',
+        inclusions: prev.inclusions || extracted.inclusions || '',
+        exclusions: prev.exclusions || extracted.exclusions || '',
+        volume: prev.volume || extracted.volume || '',
+        timeline: prev.timeline || extracted.timeline || '',
+        sla: prev.sla || extracted.sla || '',
+        evidence: prev.evidence || extracted.evidence || '',
+        compliance: prev.compliance || extracted.compliance || '',
+      };
+    });
+    setRfqPackage(null);
+    setRfqFeedback('');
+    onRun('rfq');
+    event.target.value = '';
+  }
+
+  function generateRfqPackage() {
+    const template = rfqTemplates.find(item => item.id === rfqState.templateId);
+    const generated = buildRfqDraft(template, focusVendor, vendors, rfqState);
+    setRfqPackage(generated);
+    setRfqState(prev => ({ ...prev, step: 'review' }));
+    const workbenchResult = buildRfqCopilotResult(generated);
+    onRfqGenerated?.(workbenchResult);
+    onRun('rfq');
+    setAssistantNote('Generated package ready. Review the RFQ package, then copy it, save it, or prepare the vendor invite.');
+    setRfqFeedback('Generated package ready. Review the RFQ package, then copy it, save it, or prepare the vendor invite.');
+    window.setTimeout(() => {
+      rfqReviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
+  }
+
+  function viewRfqPackage() {
+    setRfqState(prev => ({ ...prev, step: 'review' }));
+    window.setTimeout(() => {
+      rfqReviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
+  }
+
+  function patchRfqPackage(patch: Partial<RfqGeneratedPackage>) {
+    setRfqPackage(prev => (prev ? { ...prev, ...patch } : prev));
+    setRfqFeedback('RFQ package updated.');
+  }
+
+  function patchRfqPackageLines(field: RfqPackageLineField, value: string) {
+    setRfqPackage(prev => (prev ? { ...prev, [field]: splitEditableRfqLines(value) } : prev));
+    setRfqFeedback('RFQ package updated.');
+  }
+
+  function patchGeneratedRfqScore(label: string, value: string) {
+    const weight = Number(value) || 0;
+    setRfqPackage(prev => (prev
+      ? { ...prev, scoringMatrix: prev.scoringMatrix.map(item => (item.label === label ? { ...item, weight } : item)) }
+      : prev));
+    const scoringKey = rfqScoringKeysByLabel[label];
+    if (scoringKey) {
+      setRfqState(prev => ({ ...prev, scoring: { ...prev.scoring, [scoringKey]: String(weight) } }));
+    }
+    setRfqFeedback('Scoring matrix updated.');
+  }
+
+  function runRfqAction(action: string) {
+    if (!rfqPackage) return;
+    if (action === 'Copy RFQ') {
+      void navigator.clipboard?.writeText(formatRfqPackageText(rfqPackage));
+      setRfqFeedback('RFQ copied for review.');
+      return;
+    }
+    if (action === 'Save to workbench') {
+      onRfqGenerated?.(buildRfqCopilotResult(rfqPackage));
+      setRfqFeedback('RFQ saved to the page workbench.');
+      return;
+    }
+    setRfqFeedback('Vendor invite prepared with selected project, scope, deadline, response fields, and required documents.');
+  }
+
+  const isCompareMode = result.action === 'compare';
+  const isRfqMode = result.action === 'rfq';
+  const isBackgroundMode = result.action === 'background';
+  const isActionPackMode = result.action === 'negotiation';
+  const rfqCurrentStepIndex = rfqStepOrder.indexOf(rfqState.step);
+  const visibleRfqTemplates = relevantRfqTemplates(rfqTemplates, rfqState.anchor.serviceCategory);
+  const selectedRfqTemplate = rfqTemplates.find(item => item.id === rfqState.templateId);
+  const rfqScoringTotal = (Object.values(rfqState.scoring) as string[]).reduce((sum, value) => sum + (Number(value) || 0), 0);
+  const rfqPackageScoringTotal = rfqPackage?.scoringMatrix.reduce((sum, item) => sum + item.weight, 0) ?? 0;
+  const rfqExtracted = extractRfqScopeFromDocuments(rfqState.documents, rfqState.pastedScope);
+  const canGenerateRfq = Boolean(
+    rfqState.anchor.propertyName
+      && rfqState.anchor.projectName
+      && rfqState.anchor.serviceCategory
+      && rfqState.anchor.sitesAreas
+      && rfqState.mode
+      && (
+        rfqState.mode === 'template'
+          ? rfqState.templateId
+          : rfqState.mode === 'docs'
+            ? (rfqState.documents.length > 0 || rfqState.pastedScope.trim() || rfqState.services.trim())
+            : (rfqState.aiBrief.trim() || rfqState.services.trim())
+      ),
+  );
+  const readableQuoteCount = quoteAnalysis?.items.filter(item => item.extractionStatus === 'Read').length ?? 0;
+  const quoteChecklist = [
+    'Package price',
+    'Committed SLA',
+    'Delivery / award date',
+    'Exclusions',
+    'Warranty',
+    'Evidence commitment',
+  ];
+  const quoteContextItems = [
+    { label: 'Property', value: quoteAssignment.propertyName || 'Select property' },
+    { label: 'Project', value: quoteAssignment.projectName || 'Select project' },
+    { label: 'Package / scope', value: quoteAssignment.packageName || 'Select package' },
+    { label: 'Budget guardrail', value: formatProcurementMoney(quoteAssignment.budgetAllowance) },
+    { label: 'Required delivery', value: quoteAssignment.requiredDeliveryDate || 'Select date' },
+    { label: 'Quote data source', value: 'Uploaded files / pasted quote text only' },
+  ];
+  const quoteHasInput = quoteDocuments.length > 0 || Boolean(quoteNotes.trim());
+  const visibleQuoteStep: QuoteWorkbenchStep = quoteAssignmentComplete ? quoteStep : 'context';
+  const quoteSteps: { id: QuoteWorkbenchStep; label: string; value: string; enabled: boolean; complete: boolean }[] = [
+    { id: 'context', label: '1 Assign Context', value: quoteAssignmentComplete ? `${quoteAssignment.propertyName} / ${quoteAssignment.packageName}` : 'required before upload', enabled: true, complete: quoteAssignmentComplete },
+    { id: 'upload', label: '2 Upload Quotes', value: quoteHasInput ? `${quoteDocuments.length} file${quoteDocuments.length === 1 ? '' : 's'} / ${quoteNotes.trim() ? 'text pasted' : 'text optional'}` : quoteAssignmentComplete ? 'ready for files / text' : 'locked until context is confirmed', enabled: quoteAssignmentComplete, complete: quoteHasInput },
+    { id: 'comparison', label: '3 AI Comparison', value: quoteAnalysis ? `${readableQuoteCount}/${quoteAnalysis.items.length} quotes readable` : 'run after upload', enabled: Boolean(quoteAnalysis), complete: Boolean(quoteAnalysis) },
+  ];
+  const quoteItemForDocument = (doc: VendorSetupDocument) => quoteAnalysis?.items.find(item => item.id === doc.id);
+  const researchStepOrder: VendorResearchStep[] = ['vendor', 'sources', 'checks', 'report'];
+  const researchCurrentStepIndex = researchStepOrder.indexOf(researchState.step);
+  const canGenerateResearchReport = Boolean(
+    researchState.vendorName.trim()
+      && researchState.legalName.trim()
+      && researchState.serviceCategory.trim()
+      && researchState.targetScope.trim()
+      && researchState.selectedChecks.length > 0,
+  );
+  const researchSourceCount = [
+    researchState.website.trim(),
+    ...splitVendorResearchLines(researchState.publicUrls),
+    ...researchState.documents,
+    researchState.notes.trim(),
+    researchState.references.trim(),
+  ].filter(Boolean).length;
+  const quoteStatusTone = (status?: QuoteExtractionStatus) => {
+    if (status === 'Read') return 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200';
+    if (status === 'Missing price' || status === 'Missing SLA' || status === 'Missing delivery') return 'border-amber-400/25 bg-amber-400/10 text-amber-200';
+    if (status === 'Unsupported / no text') return 'border-slate-400/25 bg-slate-400/10 text-slate-200';
+    if (status === 'Needs clarification') return 'border-red-400/25 bg-red-400/10 text-red-200';
+    return 'border-[#2E7FFF]/22 bg-[#2E7FFF]/10 text-[#8DBDFF]';
+  };
+  const quoteRiskTone = (risk: QuoteAnalysisItem['risk']) => (
+    risk === 'Low'
+      ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200'
+      : risk === 'Medium'
+        ? 'border-amber-400/25 bg-amber-400/10 text-amber-200'
+        : 'border-red-400/25 bg-red-400/10 text-red-200'
+  );
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="absolute inset-0 z-50 flex items-center justify-center bg-[#020814]/78 px-5 backdrop-blur-sm"
+    >
+      <motion.div
+        initial={{ opacity: 0, y: 18, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 12, scale: 0.98 }}
+        className={`flex max-h-[90vh] w-full ${isCompareMode || isRfqMode || isBackgroundMode || isActionPackMode ? 'max-w-6xl' : 'max-w-5xl'} flex-col overflow-hidden rounded-2xl border border-[#2E7FFF]/30 bg-[#081528] shadow-2xl`}
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-[rgba(46,127,255,0.16)] bg-[linear-gradient(135deg,rgba(46,127,255,0.18),rgba(124,58,237,0.12))] px-5 py-4">
+          <div>
+            <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-violet-300/25 bg-violet-400/10 px-3 py-1 text-[10px] font-black tracking-[0.18em] text-violet-100">
+              <MessageSquare size={12} />
+              {isCompareMode ? 'Quote Comparison Workbench' : isRfqMode ? 'RFQ Builder' : isBackgroundMode ? 'Background Check Wizard' : isActionPackMode ? 'Action Pack Wizard' : 'Procurement assistant'}
+            </div>
+            <h3 className="text-xl font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
+              {isCompareMode ? 'Compare supplier quotes' : isRfqMode ? 'Build a project-anchored RFQ' : isBackgroundMode ? 'Build a vendor due diligence report' : isActionPackMode ? 'Build a manager action pack' : 'How can I help?'}
+            </h3>
+            <p className="mt-1 max-w-2xl text-[12px] leading-5 text-[#9CB1CC]">
+              {isCompareMode
+                ? 'Assign the property, project, and package first, then compare uploaded supplier quotes against that context.'
+                : isRfqMode
+                  ? <>Anchor the property and project first, then choose whether to tell AI, use a template, or upload scope documents.</>
+                : isBackgroundMode
+                  ? 'Enter vendor details, public-source URLs, documents, notes, and check categories. The report is based on provided inputs and VendorIQ performance data.'
+                : isActionPackMode
+                  ? 'Choose the vendor, recovery objective, urgency, owner, and KPI targets before generating the manager-ready pack.'
+                : <>Tell me the procurement outcome. I will generate the artifact and keep the vendor context anchored to <span className="font-bold text-[#EEF3FA]">{focusVendor.name}</span>.</>}
+            </p>
+          </div>
+          <button onClick={onClose} className="rounded-xl border border-white/10 bg-white/5 p-2 text-[#8AA6C8] transition-colors hover:bg-white/10 hover:text-white" aria-label="Close procurement assistant">
+            <X size={18} />
+          </button>
+        </div>
+
+        {isCompareMode ? (
+          <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-5">
+            <div className="grid gap-3 sm:grid-cols-3">
+              {quoteSteps.map(step => (
+                <button
+                  key={step.id}
+                  type="button"
+                  disabled={!step.enabled}
+                  onClick={() => setQuoteStep(step.id)}
+                  className={`rounded-xl border p-3 text-left transition-all ${
+                    visibleQuoteStep === step.id
+                      ? 'border-[#2E7FFF]/48 bg-[#2E7FFF]/16 shadow-[0_0_22px_rgba(46,127,255,0.10)]'
+                      : step.complete
+                        ? 'border-emerald-400/24 bg-emerald-400/10'
+                        : 'border-[rgba(46,127,255,0.14)] bg-[#07111F]'
+                  } ${step.enabled ? 'hover:-translate-y-0.5 hover:border-[#2E7FFF]/38' : 'cursor-not-allowed opacity-60'}`}
+                >
+                  <div className={`text-[10px] font-black uppercase tracking-[0.16em] ${
+                    visibleQuoteStep === step.id ? 'text-[#8DBDFF]' : step.complete ? 'text-emerald-200' : 'text-[#7A94B4]'
+                  }`}
+                  >
+                    {step.label}
+                  </div>
+                  <div className="mt-1 text-[11px] leading-4 text-[#C8D8EE]">{step.value}</div>
+                </button>
+              ))}
+            </div>
+
+            <div className={`mt-4 grid gap-4 ${visibleQuoteStep === 'comparison' ? '' : 'lg:grid-cols-[0.92fr_1.08fr]'}`}>
+              <div className="space-y-4">
+                {visibleQuoteStep === 'context' && (
+                <section className="rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#07111F] p-4">
+                  <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-[#8DBDFF]">
+                        <Target size={13} />
+                        Assign Procurement Context
+                      </div>
+                      <p className="mt-1 text-[11px] leading-5 text-[#9CB1CC]">Choose where these uploaded quotes belong before AI compares them.</p>
+                    </div>
+                    <span className={`rounded-full border px-2.5 py-1 text-[9px] font-black ${quoteAssignmentComplete ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200' : 'border-amber-400/25 bg-amber-400/10 text-amber-200'}`}>
+                      {quoteAssignmentComplete ? 'Context assigned' : 'Context required'}
+                    </span>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <VendorWizardField label="Property">
+                      <VendorWizardSelect value={quoteAssignment.propertyId} onChange={event => changeQuoteProperty(event.target.value)}>
+                        {propertyOptions.map(option => (
+                          <option key={option.id} value={option.id}>{option.label}</option>
+                        ))}
+                      </VendorWizardSelect>
+                    </VendorWizardField>
+                    <VendorWizardField label="Project">
+                      <VendorWizardSelect value={quoteAssignment.projectId} onChange={event => changeQuoteProject(event.target.value)}>
+                        {quoteProjectOptions.map(option => (
+                          <option key={option.id} value={option.id}>{option.label}</option>
+                        ))}
+                      </VendorWizardSelect>
+                    </VendorWizardField>
+                    <VendorWizardField label="Procurement package / scope">
+                      <VendorWizardSelect value={quoteAssignment.packageName} onChange={event => changeQuotePackage(event.target.value)}>
+                        {procurementPackageTemplates.map(option => (
+                          <option key={option.name} value={option.name}>{option.name}</option>
+                        ))}
+                      </VendorWizardSelect>
+                    </VendorWizardField>
+                    <VendorWizardField label="Package budget / estimate">
+                      <VendorWizardInput
+                        type="number"
+                        min={1}
+                        value={quoteAssignment.budgetAllowance}
+                        onChange={event => patchQuoteAssignment({ budgetAllowance: Number(event.target.value) || 0 })}
+                      />
+                    </VendorWizardField>
+                    <VendorWizardField label="Required delivery / award deadline">
+                      <VendorWizardInput
+                        type="date"
+                        value={quoteAssignment.requiredDeliveryDate}
+                        onChange={event => patchQuoteAssignment({ requiredDeliveryDate: event.target.value })}
+                      />
+                    </VendorWizardField>
+                    <div className="rounded-xl border border-[rgba(46,127,255,0.12)] bg-[#0D1E3A] p-3">
+                      <div className="text-[9px] font-black uppercase tracking-[0.14em] text-[#7A94B4]">Evaluation basis</div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {quoteAssignment.evaluationCriteria.map(item => (
+                          <span key={item} className="rounded-full border border-[#2E7FFF]/18 bg-[#2E7FFF]/10 px-2 py-1 text-[9px] font-bold text-[#BFD8FF]">{item}</span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 rounded-xl border border-cyan-300/18 bg-cyan-300/8 p-3">
+                    <div className="text-[9px] font-black uppercase tracking-[0.14em] text-cyan-100">Source</div>
+                    <div className="mt-1 text-[11px] leading-5 text-[#DDF7FF]">
+                      Assigned to: <span className="font-black">{quoteAssignment.propertyName} / {quoteAssignment.projectName} / {quoteAssignment.packageName}</span>. Source: user-selected procurement context. Quote data: actual uploaded files, with manual paste only as backup.
+                    </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[#2E7FFF]/14 pt-4">
+                    <div className="text-[11px] leading-5 text-[#8AA6C8]">
+                      Quote upload unlocks only after the assignment is confirmed.
+                    </div>
+                    <button
+                      type="button"
+                      disabled={!quoteAssignmentComplete}
+                      onClick={() => setQuoteStep('upload')}
+                      className="inline-flex items-center gap-2 rounded-xl bg-[#2E7FFF] px-4 py-2 text-[11px] font-bold text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF] disabled:cursor-not-allowed disabled:bg-[#1A3356] disabled:text-[#7891B0] disabled:shadow-none"
+                    >
+                      Continue to Upload Quotes
+                      <ChevronRight size={13} />
+                    </button>
+                  </div>
+                </section>
+                )}
+
+                {visibleQuoteStep === 'upload' && (
+                <section className="rounded-2xl border border-emerald-400/22 bg-emerald-500/8 p-4">
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-cyan-300/18 bg-cyan-300/8 px-3 py-2.5">
+                    <div className="text-[11px] leading-5 text-[#DDF7FF]">
+                      Assigned to: <span className="font-black">{quoteAssignment.propertyName} / {quoteAssignment.projectName} / {quoteAssignment.packageName}</span>
+                    </div>
+                    <button type="button" onClick={() => setQuoteStep('context')} className="rounded-lg border border-[#2E7FFF]/22 bg-[#07111F] px-2.5 py-1.5 text-[10px] font-bold text-[#BFD8FF] transition-colors hover:bg-[#2E7FFF]/12 hover:text-white">
+                      Edit context
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="inline-flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-emerald-200">
+                        <BarChart3 size={13} />
+                        Quote Intake
+                      </div>
+                      <h4 className="mt-1 text-sm font-bold text-[#EEF3FA]">Upload actual quote files</h4>
+                      <p className="mt-1 text-[11px] leading-5 text-[#9CB1CC]">
+                        AI reads uploaded quote files and keeps missing price, SLA, delivery, or evidence fields visible as clarification needs.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <label className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-[11px] font-bold transition-all ${
+                        quoteAssignmentComplete
+                          ? 'cursor-pointer border-[#2E7FFF]/30 bg-[#2E7FFF]/12 text-[#BFD8FF] hover:bg-[#2E7FFF]/18'
+                          : 'cursor-not-allowed border-[#2E7FFF]/12 bg-[#0D1E3A] text-[#607B9A]'
+                      }`}>
+                        <UploadCloud size={13} />
+                        Upload quotes
+                        <input
+                          type="file"
+                          multiple
+                          accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.md,.json"
+                          onChange={addQuoteDocuments}
+                          disabled={!quoteAssignmentComplete}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  <textarea
+                    value={quoteNotes}
+                    onChange={event => {
+                      setQuoteNotes(event.target.value);
+                      setQuoteAnalysis(null);
+                      setQuoteActionArtifact(null);
+                      setQuoteReportFeedback('');
+                    }}
+                    disabled={!quoteAssignmentComplete}
+                    placeholder={quoteAssignmentComplete ? 'Paste quote text manually. Separate multiple quotes with --- so AI can compare them cleanly.' : 'Assign property, project, and package before pasting quote text.'}
+                    className="mt-4 min-h-[104px] w-full resize-none rounded-xl border border-[rgba(46,127,255,0.18)] bg-[#050C17] px-3 py-2.5 text-[12px] leading-relaxed text-[#EEF3FA] outline-none transition-all placeholder:text-[#4A6480] focus:border-[#2E7FFF]"
+                  />
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={analyseQuotes}
+                      disabled={!quoteAssignmentComplete || (quoteDocuments.length === 0 && !quoteNotes.trim())}
+                      className="inline-flex items-center gap-2 rounded-xl bg-[#2E7FFF] px-3 py-2 text-[11px] font-bold text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF] disabled:cursor-not-allowed disabled:bg-[#1A3356] disabled:text-[#7891B0] disabled:shadow-none"
+                    >
+                      <Sparkles size={13} />
+                      Analyse quotes
+                    </button>
+                    {(quoteDocuments.length > 0 || quoteNotes || quoteAnalysis) && (
+                      <button type="button" onClick={clearQuoteIntake} className="rounded-xl border border-[#2E7FFF]/18 px-3 py-2 text-[10px] font-bold text-[#8AA6C8] transition-colors hover:text-white">
+                        Clear intake
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="mt-4 grid gap-2">
+                    {quoteDocuments.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-[#2E7FFF]/25 bg-[#07111F] px-3 py-3 text-[11px] leading-5 text-[#8AA6C8]">
+                        {quoteAssignmentComplete
+                          ? 'No quote files uploaded yet. Upload actual supplier quotes or paste quote text manually above.'
+                          : 'Assign a property, project, and package first. Quote upload unlocks after context is complete.'}
+                      </div>
+                    ) : (
+                      quoteDocuments.map(doc => {
+                        const item = quoteItemForDocument(doc);
+                        const status = item?.extractionStatus ?? 'Uploaded';
+                        return (
+                          <div key={doc.id} className="rounded-xl border border-[#2E7FFF]/18 bg-[#102544] p-3 text-[10px] text-[#C8D8EE]">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <FileText size={12} className="text-[#8DBDFF]" />
+                              <span className="max-w-[260px] truncate font-semibold">{doc.name}</span>
+                              <span className="text-[#6F89AA]">{doc.sizeLabel}</span>
+                              <span className={`ml-auto rounded-full border px-2 py-1 text-[9px] font-black ${quoteStatusTone(item?.extractionStatus)}`}>
+                                {status}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setQuoteDocuments(prev => prev.filter(entry => entry.id !== doc.id));
+                                  setQuoteAnalysis(null);
+                                  setQuoteActionArtifact(null);
+                                  setQuoteReportFeedback('');
+                                }}
+                                className="text-[#7A94B4] hover:text-red-300"
+                                aria-label={`Remove ${doc.name}`}
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            </div>
+                            {item?.missingFields.length ? (
+                              <div className="mt-2 text-[9px] leading-4 text-amber-200">
+                                Needs clarification: {item.missingFields.join(', ')}
+                              </div>
+                            ) : null}
+                            {doc.warning && <div className="mt-1 text-[9px] leading-4 text-amber-200">{doc.warning}</div>}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </section>
+                )}
+
+                {visibleQuoteStep === 'comparison' && (
+                <section className="rounded-2xl border border-[#2E7FFF]/20 bg-[#07111F] p-4">
+                  <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-[#8DBDFF]">
+                    <ListChecks size={13} />
+                    Selected quote pack
+                  </div>
+                  <div className="mt-3 grid gap-2">
+                    {quoteContextItems.map(item => (
+                      <div key={item.label} className="rounded-xl border border-[#2E7FFF]/12 bg-[#0D1E3A] p-3">
+                        <div className="text-[9px] font-black uppercase tracking-[0.14em] text-[#7A94B4]">{item.label}</div>
+                        <div className="mt-1 text-[12px] font-black text-[#EEF3FA]">{item.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button type="button" onClick={() => setQuoteStep('context')} className="rounded-xl border border-[#2E7FFF]/18 px-3 py-2 text-[10px] font-bold text-[#8AA6C8] transition-colors hover:text-white">
+                      Edit context
+                    </button>
+                    <button type="button" onClick={() => setQuoteStep('upload')} className="rounded-xl border border-[#2E7FFF]/18 px-3 py-2 text-[10px] font-bold text-[#BFD8FF] transition-colors hover:bg-[#2E7FFF]/12 hover:text-white">
+                      Review uploaded quotes
+                    </button>
+                  </div>
+                </section>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                {!quoteAnalysis ? (
+                  <section className="rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#0D1E3A] p-4">
+                    <div className="mb-3 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-[#8DBDFF]">
+                      <Brain size={13} />
+                      What AI will check
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {quoteChecklist.map(item => (
+                        <div key={item} className="flex items-center gap-2 rounded-xl border border-[rgba(46,127,255,0.12)] bg-[#07111F] p-3 text-[11px] font-bold text-[#C8D8EE]">
+                          <CheckCircle size={12} className="shrink-0 text-emerald-400" />
+                          {item}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-4 rounded-xl border border-violet-300/18 bg-violet-400/10 p-4">
+                      <div className="text-[12px] font-black text-[#EEF3FA]">Upload-driven comparison</div>
+                      <p className="mt-1 text-[11px] leading-5 text-[#9CB1CC]">
+                        The ranking starts only after actual supplier quote files are uploaded or quote text is manually pasted for the selected project package.
+                      </p>
+                      <div className="mt-3 rounded-lg border border-[#2E7FFF]/14 bg-[#07111F] px-3 py-2 text-[10px] leading-4 text-[#BFD8FF]">
+                        Current assignment: {quoteAssignment.propertyName} / {quoteAssignment.projectName} / {quoteAssignment.packageName}
+                      </div>
+                    </div>
+                  </section>
+                ) : (
+                  <>
+                    <section className="overflow-hidden rounded-2xl border border-emerald-400/24 bg-[linear-gradient(135deg,rgba(6,78,59,0.32),rgba(7,17,31,0.96))]">
+                      <div className="border-b border-emerald-400/16 px-4 py-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-200">Award recommendation</div>
+                              <span className={`rounded-full border px-2 py-1 text-[9px] font-black ${quoteRiskTone(quoteAnalysis.winner.risk)}`}>
+                                {quoteAnalysis.winner.risk} risk
+                              </span>
+                              <span className="rounded-full border border-[#2E7FFF]/25 bg-[#2E7FFF]/10 px-2 py-1 text-[9px] font-black text-[#8DBDFF]">
+                                {quoteAnalysis.winner.score}/100
+                              </span>
+                            </div>
+                            <h4 className="mt-2 text-[22px] font-black leading-tight text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
+                              {quoteAnalysis.winner.vendorName}
+                            </h4>
+                            <p className="mt-2 max-w-3xl text-[12px] leading-5 text-[#C8D8EE]">{quoteAnalysis.summary}</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => prepareQuoteAction('Prepare Award Brief')}
+                            className="rounded-xl bg-emerald-400 px-3 py-2 text-[10px] font-black text-[#032014] shadow-[0_0_18px_rgba(52,211,153,0.22)] transition-all hover:-translate-y-0.5 hover:bg-emerald-300"
+                          >
+                            Prepare award brief
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 p-4 xl:grid-cols-[1fr_0.72fr]">
+                        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                          {[
+                            ['Commercial offer', quoteAnalysis.winner.amount === null ? 'Needs price' : formatProcurementMoney(quoteAnalysis.winner.amount), 'text-[#EEF3FA]'],
+                            ['Budget variance', quoteAnalysis.winner.commercialDelta === null ? 'Not available' : `${quoteAnalysis.winner.commercialDelta >= 0 ? '+' : '-'}${formatProcurementMoney(Math.abs(quoteAnalysis.winner.commercialDelta))}`, quoteAnalysis.winner.commercialDelta !== null && quoteAnalysis.winner.commercialDelta > 0 ? 'text-amber-200' : 'text-emerald-200'],
+                            ['SLA commitment', quoteAnalysis.winner.sla === null ? 'Needs SLA' : `${quoteAnalysis.winner.sla}%`, 'text-[#EEF3FA]'],
+                            ['Delivery', quoteAnalysis.winner.deliveryDate ?? 'Needs date', 'text-[#EEF3FA]'],
+                            ['Warranty', compactQuoteText(quoteAnalysis.winner.warranty, 42), 'text-[#EEF3FA]'],
+                            ['Clarifications', `${quoteAnalysis.clarificationQuestions.length}`, quoteAnalysis.clarificationQuestions.length ? 'text-amber-200' : 'text-emerald-200'],
+                          ].map(([label, value, tone]) => (
+                            <div key={label} className="rounded-xl border border-emerald-400/16 bg-[#07111F]/84 p-3">
+                              <div className="text-[9px] font-black uppercase tracking-[0.14em] text-[#7A94B4]">{label}</div>
+                              <div className={`mt-1 text-[13px] font-black leading-5 ${tone}`}>{value}</div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="rounded-xl border border-emerald-400/16 bg-[#07111F]/84 p-3">
+                          <div className="text-[9px] font-black uppercase tracking-[0.14em] text-emerald-200">Decision rationale</div>
+                          <div className="mt-2 space-y-2">
+                            {quoteAnalysis.findings.slice(0, 3).map(finding => (
+                              <div key={finding} className="flex gap-2 text-[10px] leading-4 text-[#C8D8EE]">
+                                <CheckCircle size={11} className="mt-0.5 shrink-0 text-emerald-300" />
+                                <span>{finding}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#07111F] p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-[#8DBDFF]">
+                            <ListChecks size={13} />
+                            Quote comparison preview
+                          </div>
+                          <p className="mt-1 max-w-2xl text-[11px] leading-5 text-[#9CB1CC]">
+                            Keep the screen readable for the meeting. The full supplier notes, exclusions, and clarification trail are packaged in the downloadable report.
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={copyQuoteReport}
+                            className="inline-flex items-center gap-2 rounded-xl border border-[#2E7FFF]/24 bg-[#2E7FFF]/10 px-3 py-2 text-[10px] font-bold text-[#BFD8FF] transition-all hover:bg-[#2E7FFF]/16"
+                          >
+                            <FileText size={12} />
+                            Copy report
+                          </button>
+                          <button
+                            type="button"
+                            onClick={downloadQuoteReport}
+                            className="inline-flex items-center gap-2 rounded-xl bg-[#2E7FFF] px-3 py-2 text-[10px] font-bold text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF]"
+                          >
+                            <Download size={12} />
+                            Download full report
+                          </button>
+                        </div>
+                      </div>
+
+                      {quoteReportFeedback && (
+                        <div className="mt-3 rounded-xl border border-emerald-400/22 bg-emerald-500/10 px-3 py-2 text-[11px] font-bold leading-5 text-emerald-100">
+                          {quoteReportFeedback}
+                        </div>
+                      )}
+
+                      <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                        {[
+                          ['Quotes read', `${quoteAnalysis.items.length}`, 'Submitted supplier offers'],
+                          ['Commercial spread', quoteAnalysis.commercialSpread === null ? 'Incomplete' : formatProcurementMoney(quoteAnalysis.commercialSpread), 'Between readable prices'],
+                          ['Clarifications', `${quoteAnalysis.clarificationQuestions.length}`, 'Questions before award'],
+                          ['High-risk quotes', `${quoteAnalysis.items.filter(item => item.risk === 'High').length}`, 'Need manager attention'],
+                        ].map(([label, value, detail]) => (
+                          <div key={label} className="rounded-xl border border-[#2E7FFF]/14 bg-[#0D1E3A] p-3">
+                            <div className="text-[9px] font-black uppercase tracking-[0.14em] text-[#7A94B4]">{label}</div>
+                            <div className="mt-1 text-[17px] font-black text-[#EEF3FA]">{value}</div>
+                            <div className="mt-1 text-[10px] leading-4 text-[#8AA6C8]">{detail}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="mt-4 grid gap-3 xl:grid-cols-3">
+                        {quoteAnalysis.items.slice(0, 3).map((item, index) => (
+                          <div key={item.id} className={`rounded-xl border p-3 ${index === 0 ? 'border-emerald-400/28 bg-emerald-400/8' : 'border-[#2E7FFF]/14 bg-[#0D1E3A]'}`}>
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="flex h-7 w-7 items-center justify-center rounded-lg border border-[#2E7FFF]/18 bg-[#07111F] text-[11px] font-black text-[#8DBDFF]">#{index + 1}</span>
+                                  {index === 0 && <span className="rounded-full border border-emerald-400/24 bg-emerald-400/10 px-2 py-0.5 text-[8px] font-black uppercase text-emerald-200">Recommended</span>}
+                                </div>
+                                <div className="mt-2 truncate text-[13px] font-black text-[#EEF3FA]">{item.vendorName}</div>
+                                <div className="mt-1 text-[10px] leading-4 text-[#8AA6C8]">{compactQuoteText(item.recommendationReason, 92)}</div>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-[18px] font-black text-[#8DBDFF]">{item.score}</div>
+                                <div className="text-[8px] font-black uppercase tracking-[0.12em] text-[#6F89AA]">Score</div>
+                              </div>
+                            </div>
+                            <div className="mt-3 grid grid-cols-2 gap-2">
+                              <div className="rounded-lg border border-[#2E7FFF]/10 bg-[#07111F]/72 px-2.5 py-2">
+                                <div className="text-[8px] font-black uppercase tracking-[0.12em] text-[#6F89AA]">Commercial</div>
+                                <div className="mt-1 text-[11px] font-black text-[#EEF3FA]">{item.amount === null ? 'Not found' : formatProcurementMoney(item.amount)}</div>
+                              </div>
+                              <div className="rounded-lg border border-[#2E7FFF]/10 bg-[#07111F]/72 px-2.5 py-2">
+                                <div className="text-[8px] font-black uppercase tracking-[0.12em] text-[#6F89AA]">SLA / delivery</div>
+                                <div className="mt-1 text-[11px] font-black text-[#EEF3FA]">{item.sla === null ? 'SLA ?' : `${item.sla}%`} / {item.deliveryDate ?? 'Date ?'}</div>
+                              </div>
+                            </div>
+                            <div className="mt-3 flex flex-wrap gap-1.5">
+                              <span className={`rounded-full border px-2 py-1 text-[8px] font-black ${quoteStatusTone(item.extractionStatus)}`}>
+                                {item.extractionStatus}
+                              </span>
+                              <span className={`rounded-full border px-2 py-1 text-[8px] font-black ${quoteRiskTone(item.risk)}`}>
+                                {item.risk}
+                              </span>
+                              {item.clarificationQuestions.length > 0 && (
+                                <span className="rounded-full border border-amber-400/22 bg-amber-400/10 px-2 py-1 text-[8px] font-black text-amber-100">
+                                  Clarification needed
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="mt-4 rounded-xl border border-amber-400/18 bg-amber-400/8 p-3">
+                        <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-[0.14em] text-amber-100">
+                          <AlertTriangle size={12} />
+                          Key conditions before award
+                        </div>
+                        <div className="mt-2 grid gap-2 lg:grid-cols-2">
+                          {(quoteAnalysis.riskConditions.length ? quoteAnalysis.riskConditions.slice(0, 4) : ['No blocking clarification conditions detected.']).map(condition => (
+                            <div key={condition} className="rounded-lg border border-amber-400/12 bg-[#07111F]/68 px-3 py-2 text-[10px] leading-4 text-amber-50">
+                              {condition}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#07111F] p-4">
+                      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-[#8DBDFF]">
+                          <Sparkles size={13} />
+                          Manager decision actions
+                        </div>
+                        <span className="rounded-full border border-[#2E7FFF]/18 bg-[#0A1628] px-2.5 py-1 text-[9px] font-black text-[#8DBDFF]">
+                          Demo-safe local drafts
+                        </span>
+                      </div>
+                      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                        {quoteAnalysis.nextActions.map(action => (
+                          <button
+                            key={action}
+                            type="button"
+                            onClick={() => prepareQuoteAction(action)}
+                            className="flex min-h-[82px] flex-col justify-between rounded-xl border border-[#2E7FFF]/20 bg-[#2E7FFF]/10 px-3 py-3 text-left transition-all hover:-translate-y-0.5 hover:border-[#2E7FFF]/45 hover:bg-[#2E7FFF]/16"
+                          >
+                            <span className="text-[11px] font-black leading-4 text-[#DDE6F8]">{action}</span>
+                            <span className="mt-3 inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-[0.12em] text-[#8DBDFF]">
+                              Prepare draft <ChevronRight size={12} />
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+
+                    {quoteActionArtifact && (
+                      <section className="rounded-2xl border border-violet-300/22 bg-violet-400/10 p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-violet-100">{quoteActionArtifact.status}</div>
+                            <div className="mt-1 text-[15px] font-black text-[#EEF3FA]">{quoteActionArtifact.title}</div>
+                            <p className="mt-1 text-[11px] leading-5 text-[#C8D8EE]">{quoteActionArtifact.body}</p>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const text = [quoteActionArtifact.title, quoteActionArtifact.body, ...quoteActionArtifact.lines].join('\n');
+                                void navigator.clipboard?.writeText(text);
+                                setAssistantNote(`${quoteActionArtifact.title} copied for manager review.`);
+                              }}
+                              className="rounded-xl border border-[#2E7FFF]/28 bg-[#2E7FFF]/12 px-3 py-2 text-[10px] font-bold text-[#BFD8FF] transition-all hover:bg-[#2E7FFF]/18"
+                            >
+                              Copy Draft
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setQuoteActionArtifact(prev => prev ? { ...prev, status: 'Ready for manager review' } : prev);
+                                setAssistantNote('The draft is marked ready. Nothing has been sent externally.');
+                              }}
+                              className="rounded-xl bg-[#2E7FFF] px-3 py-2 text-[10px] font-bold text-white transition-all hover:bg-[#4B91FF]"
+                            >
+                              Mark Ready
+                            </button>
+                          </div>
+                        </div>
+                        <div className="mt-3 space-y-2">
+                          {quoteActionArtifact.lines.map(line => (
+                            <div key={line} className="flex gap-2 rounded-xl border border-violet-300/14 bg-[#07111F] p-3 text-[11px] leading-5 text-[#DDE6F8]">
+                              <CheckCircle size={12} className="mt-1 shrink-0 text-violet-200" />
+                              {line}
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : isRfqMode ? (
+          <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-5">
+            <div className="grid gap-2 sm:grid-cols-6">
+              {rfqStepOrder.map((step, index) => (
+                <button
+                  key={step}
+                  type="button"
+                  onClick={() => patchRfq({ step })}
+                  className={`rounded-xl border px-3 py-2 text-left transition-all ${
+                    rfqState.step === step
+                      ? 'border-[#2E7FFF]/45 bg-[#2E7FFF]/18 text-white'
+                      : index < rfqCurrentStepIndex
+                        ? 'border-emerald-400/24 bg-emerald-400/10 text-emerald-100'
+                        : 'border-[rgba(46,127,255,0.14)] bg-[#07111F] text-[#8AA6C8]'
+                  }`}
+                >
+                  <div className="text-[9px] font-black uppercase tracking-[0.14em]">{index + 1}</div>
+                  <div className="mt-1 text-[11px] font-black capitalize">{step}</div>
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_320px]">
+              <section className="rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#07111F] p-5">
+                {rfqState.step === 'project' && (
+                  <div className="space-y-4">
+                    <div>
+                      <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Project anchor</div>
+                      <h4 className="mt-1 text-lg font-black text-[#EEF3FA]">Select where this RFQ belongs</h4>
+                      <p className="mt-1 text-[12px] leading-5 text-[#9CB1CC]">The generated RFQ will carry this property, project, site, and vendor context.</p>
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <VendorWizardField label="Property">
+                        <VendorWizardSelect value={rfqState.anchor.propertyId} onChange={event => changeRfqProperty(event.target.value)}>
+                          {propertyOptions.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+                        </VendorWizardSelect>
+                      </VendorWizardField>
+                      <VendorWizardField label="Project">
+                        <VendorWizardSelect value={rfqState.anchor.projectId} onChange={event => changeRfqProject(event.target.value)}>
+                          {projectOptions.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+                        </VendorWizardSelect>
+                      </VendorWizardField>
+                      <VendorWizardField label="Service category">
+                        <VendorWizardSelect value={rfqState.anchor.serviceCategory} onChange={event => changeRfqServiceCategory(event.target.value)}>
+                          {vendorCategories.map(category => <option key={category}>{category}</option>)}
+                        </VendorWizardSelect>
+                      </VendorWizardField>
+                      <VendorWizardField label="Sites / areas">
+                        <VendorWizardInput value={rfqState.anchor.sitesAreas} onChange={event => patchRfqAnchor({ sitesAreas: event.target.value })} placeholder="Tower, floors, assets, zones, communities" />
+                      </VendorWizardField>
+                      <VendorWizardField label="Target start date">
+                        <VendorWizardInput type="date" value={rfqState.anchor.targetStartDate} onChange={event => patchRfqAnchor({ targetStartDate: event.target.value })} />
+                      </VendorWizardField>
+                      <VendorWizardField label="Contract period">
+                        <VendorWizardInput value={rfqState.anchor.contractPeriod} onChange={event => patchRfqAnchor({ contractPeriod: event.target.value })} placeholder="12 months, project duration, one-off package" />
+                      </VendorWizardField>
+                      <VendorWizardField label="Current vendor / incumbent">
+                        <VendorWizardInput value={rfqState.anchor.currentVendor} onChange={event => patchRfqAnchor({ currentVendor: event.target.value })} />
+                      </VendorWizardField>
+                      <VendorWizardField label="Shortlist context">
+                        <VendorWizardInput value={rfqState.anchor.shortlistContext} onChange={event => patchRfqAnchor({ shortlistContext: event.target.value })} placeholder="Incumbent plus 3 approved alternates" />
+                      </VendorWizardField>
+                    </div>
+                  </div>
+                )}
+
+                {rfqState.step === 'mode' && (
+                  <div className="space-y-4">
+                    <div>
+                      <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Creation mode</div>
+                      <h4 className="mt-1 text-lg font-black text-[#EEF3FA]">Choose how to build the RFQ</h4>
+                      <p className="mt-1 text-[12px] leading-5 text-[#9CB1CC]">All modes produce the same structured review package.</p>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-3">
+                      {[
+                        { id: 'tell' as const, label: 'Tell AI', icon: <MessageSquare size={17} />, detail: 'Describe the outcome and scope in plain language.' },
+                        { id: 'template' as const, label: 'Use Template', icon: <ListChecks size={17} />, detail: 'Start from a service category structure, then edit it.' },
+                        { id: 'docs' as const, label: 'Upload Scope Docs', icon: <UploadCloud size={17} />, detail: 'Use scope, BOQ, SLA, service notes, or site requirements.' },
+                      ].map(mode => (
+                        <button
+                          key={mode.id}
+                          type="button"
+                          onClick={() => chooseRfqMode(mode.id)}
+                          className={`rounded-2xl border p-4 text-left transition-all hover:-translate-y-0.5 ${
+                            rfqState.mode === mode.id
+                              ? 'border-[#2E7FFF]/50 bg-[#2E7FFF]/18 shadow-[0_0_24px_rgba(46,127,255,0.14)]'
+                              : 'border-[rgba(46,127,255,0.16)] bg-[#0D1E3A] hover:border-[#2E7FFF]/34'
+                          }`}
+                        >
+                          <span className="grid h-10 w-10 place-items-center rounded-xl bg-[#2E7FFF]/14 text-[#8DBDFF]">{mode.icon}</span>
+                          <div className="mt-3 text-[13px] font-black text-[#EEF3FA]">{mode.label}</div>
+                          <p className="mt-1 text-[11px] leading-5 text-[#9CB1CC]">{mode.detail}</p>
+                        </button>
+                      ))}
+                    </div>
+                    {rfqState.mode === 'template' && (
+                      <div className="rounded-2xl border border-[rgba(46,127,255,0.16)] bg-[#0D1E3A] p-4">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Templates for {rfqState.anchor.serviceCategory}</div>
+                          <div className="rounded-full border border-[#2E7FFF]/18 bg-[#07111F] px-2.5 py-1 text-[10px] font-black text-[#8DBDFF]">{visibleRfqTemplates.length} relevant option{visibleRfqTemplates.length === 1 ? '' : 's'}</div>
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {visibleRfqTemplates.map(template => (
+                            <button
+                              key={template.id}
+                              type="button"
+                              onClick={() => changeRfqTemplate(template.id)}
+                              className={`rounded-xl border p-3 text-left transition-all ${
+                                rfqState.templateId === template.id
+                                  ? 'border-emerald-400/38 bg-emerald-400/12 text-white'
+                                  : 'border-[rgba(46,127,255,0.14)] bg-[#07111F] text-[#C8D8EE] hover:border-[#2E7FFF]/34'
+                              }`}
+                            >
+                              <div className="text-[12px] font-black">{template.label}</div>
+                              <div className="mt-1 text-[10px] leading-4 text-[#8AA6C8]">{template.category}</div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {rfqState.step === 'scope' && (
+                  <div className="space-y-4">
+                    <div>
+                      <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Scope</div>
+                      <h4 className="mt-1 text-lg font-black text-[#EEF3FA]">Define what vendors are pricing</h4>
+                      <p className="mt-1 text-[12px] leading-5 text-[#9CB1CC]">Enter only what you know. The review package will show anything that still needs confirmation.</p>
+                    </div>
+                    {rfqState.mode === 'tell' && (
+                      <VendorWizardField label="Tell AI what you need">
+                        <textarea value={rfqState.aiBrief} onChange={event => patchRfq({ aiBrief: event.target.value })} placeholder="Describe the procurement outcome, service scope, sites, constraints, current vendor issue, and desired timeline." className="min-h-[118px] w-full resize-none rounded-xl border border-[rgba(46,127,255,0.22)] bg-[#07111F] px-3 py-2.5 text-[12px] leading-5 text-[#EEF3FA] outline-none placeholder:text-[#4A6480] focus:border-[#2E7FFF]" />
+                      </VendorWizardField>
+                    )}
+                    {rfqState.mode === 'docs' && (
+                      <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/8 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-200">Scope documents</div>
+                            <p className="mt-1 text-[11px] leading-5 text-[#9CB1CC]">Upload or paste the scope content you want used.</p>
+                          </div>
+                          <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-[#2E7FFF]/30 bg-[#2E7FFF]/12 px-3 py-2 text-[11px] font-bold text-[#BFD8FF] transition-all hover:bg-[#2E7FFF]/18">
+                            <UploadCloud size={13} />
+                            Upload docs
+                            <input type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.md,.json" onChange={addRfqDocuments} className="hidden" />
+                          </label>
+                        </div>
+                        <textarea value={rfqState.pastedScope} onChange={event => {
+                          const extracted = extractRfqScopeFromDocuments(rfqState.documents, event.target.value);
+                          patchRfq({
+                            pastedScope: event.target.value,
+                            services: rfqState.services || extracted.services || '',
+                            inclusions: rfqState.inclusions || extracted.inclusions || '',
+                            exclusions: rfqState.exclusions || extracted.exclusions || '',
+                            volume: rfqState.volume || extracted.volume || '',
+                            timeline: rfqState.timeline || extracted.timeline || '',
+                          });
+                        }} placeholder="Paste scope, BOQ, SLA, service notes, or site requirements." className="mt-3 min-h-[106px] w-full resize-none rounded-xl border border-[rgba(46,127,255,0.18)] bg-[#050C17] px-3 py-2.5 text-[12px] leading-relaxed text-[#EEF3FA] outline-none placeholder:text-[#4A6480] focus:border-[#2E7FFF]" />
+                        <div className="mt-3 grid gap-2">
+                          {rfqState.documents.length === 0 ? (
+                            <div className="rounded-xl border border-dashed border-[#2E7FFF]/25 px-3 py-3 text-[11px] text-[#8AA6C8]">No scope files uploaded yet.</div>
+                          ) : rfqState.documents.map(doc => (
+                            <div key={doc.id} className="flex flex-wrap items-center gap-2 rounded-xl border border-[#2E7FFF]/18 bg-[#102544] p-3 text-[10px] text-[#C8D8EE]">
+                              <FileText size={12} className="text-[#8DBDFF]" />
+                              <span className="max-w-[280px] truncate font-semibold">{doc.name}</span>
+                              <span className="text-[#6F89AA]">{doc.sizeLabel}</span>
+                              {doc.warning && <span className="text-amber-200">{doc.warning}</span>}
+                              <button type="button" onClick={() => patchRfq({ documents: rfqState.documents.filter(item => item.id !== doc.id) })} className="ml-auto text-[#7A94B4] hover:text-red-300" aria-label={`Remove ${doc.name}`}>
+                                <Trash2 size={11} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <VendorWizardField label="Services">
+                        <textarea value={rfqState.services} onChange={event => patchRfq({ services: event.target.value })} placeholder="Service lines, packages, or workstreams" className="min-h-[96px] w-full resize-none rounded-xl border border-[rgba(46,127,255,0.22)] bg-[#07111F] px-3 py-2.5 text-[12px] text-[#EEF3FA] outline-none placeholder:text-[#4A6480] focus:border-[#2E7FFF]" />
+                      </VendorWizardField>
+                      <VendorWizardField label="Inclusions">
+                        <textarea value={rfqState.inclusions} onChange={event => patchRfq({ inclusions: event.target.value })} placeholder="What must be included" className="min-h-[96px] w-full resize-none rounded-xl border border-[rgba(46,127,255,0.22)] bg-[#07111F] px-3 py-2.5 text-[12px] text-[#EEF3FA] outline-none placeholder:text-[#4A6480] focus:border-[#2E7FFF]" />
+                      </VendorWizardField>
+                      <VendorWizardField label="Exclusions / assumptions">
+                        <textarea value={rfqState.exclusions} onChange={event => patchRfq({ exclusions: event.target.value })} placeholder="What bidders must call out clearly" className="min-h-[84px] w-full resize-none rounded-xl border border-[rgba(46,127,255,0.22)] bg-[#07111F] px-3 py-2.5 text-[12px] text-[#EEF3FA] outline-none placeholder:text-[#4A6480] focus:border-[#2E7FFF]" />
+                      </VendorWizardField>
+                      <div className="grid gap-4">
+                        <VendorWizardField label="Volume / asset basis">
+                          <VendorWizardInput value={rfqState.volume || rfqExtracted.volume || ''} onChange={event => patchRfq({ volume: event.target.value })} placeholder="Assets, units, sqm, monthly jobs, BOQ basis" />
+                        </VendorWizardField>
+                        <VendorWizardField label="Timeline">
+                          <VendorWizardInput value={rfqState.timeline || rfqExtracted.timeline || ''} onChange={event => patchRfq({ timeline: event.target.value })} placeholder="Mobilisation, milestones, service start" />
+                        </VendorWizardField>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {rfqState.step === 'requirements' && (
+                  <div className="space-y-4">
+                    <div>
+                      <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Requirements</div>
+                      <h4 className="mt-1 text-lg font-black text-[#EEF3FA]">Set the rules vendors must answer</h4>
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      {[
+                        ['SLA / response rules', 'sla', rfqState.sla || rfqExtracted.sla || ''],
+                        ['Evidence requirements', 'evidence', rfqState.evidence || rfqExtracted.evidence || ''],
+                        ['Compliance documents', 'compliance', rfqState.compliance || rfqExtracted.compliance || ''],
+                        ['Licences / authority approvals', 'licenses', rfqState.licenses],
+                        ['Insurance', 'insurance', rfqState.insurance],
+                        ['HSE and mobilisation', 'hse', rfqState.hse],
+                      ].map(([label, key, value]) => (
+                        <VendorWizardField key={key} label={label}>
+                          <textarea
+                            value={value}
+                            onChange={event => patchRfq({ [key]: event.target.value } as Partial<RfqWizardState>)}
+                            placeholder={`Add ${label.toLowerCase()}`}
+                            className="min-h-[92px] w-full resize-none rounded-xl border border-[rgba(46,127,255,0.22)] bg-[#07111F] px-3 py-2.5 text-[12px] text-[#EEF3FA] outline-none placeholder:text-[#4A6480] focus:border-[#2E7FFF]"
+                          />
+                        </VendorWizardField>
+                      ))}
+                      <VendorWizardField label="Mobilisation notes">
+                        <textarea value={rfqState.mobilisation} onChange={event => patchRfq({ mobilisation: event.target.value })} placeholder="Resource plan, lead times, access constraints, kickoff sequence" className="min-h-[92px] w-full resize-none rounded-xl border border-[rgba(46,127,255,0.22)] bg-[#07111F] px-3 py-2.5 text-[12px] text-[#EEF3FA] outline-none placeholder:text-[#4A6480] focus:border-[#2E7FFF]" />
+                      </VendorWizardField>
+                    </div>
+                  </div>
+                )}
+
+                {rfqState.step === 'scoring' && (
+                  <div className="space-y-4">
+                    <div>
+                      <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Scoring</div>
+                      <h4 className="mt-1 text-lg font-black text-[#EEF3FA]">Tune the evaluation weights</h4>
+                      <p className="mt-1 text-[12px] leading-5 text-[#9CB1CC]">Current total: <span className={rfqScoringTotal === 100 ? 'text-emerald-200' : 'text-amber-200'}>{rfqScoringTotal}%</span>. The package will show the weights exactly as set.</p>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {(Object.keys(rfqState.scoring) as RfqScoringKey[]).map(key => (
+                        <div key={key} className="rounded-xl border border-[rgba(46,127,255,0.14)] bg-[#0D1E3A] p-3">
+                          <div className="mb-2 flex items-center justify-between gap-3">
+                            <label className="text-[11px] font-black uppercase tracking-[0.12em] text-[#8DBDFF]">{key}</label>
+                            <span className="text-[12px] font-black text-[#EEF3FA]">{rfqState.scoring[key]}%</span>
+                          </div>
+                          <input type="range" min="0" max="50" value={rfqState.scoring[key]} onChange={event => patchRfqScoring(key, event.target.value)} className="w-full accent-[#2E7FFF]" />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {rfqState.step === 'review' && (
+                  <div ref={rfqReviewRef} className="space-y-4">
+                    {!rfqPackage ? (
+                      <>
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Review package</div>
+                            <h4 className="mt-1 text-lg font-black text-[#EEF3FA]">Generate the RFQ review package</h4>
+                            <p className="mt-1 text-[12px] leading-5 text-[#9CB1CC]">Complete the required context, then generate the package for review before sending.</p>
+                          </div>
+                          <button type="button" onClick={generateRfqPackage} disabled={!canGenerateRfq} className="inline-flex items-center gap-2 rounded-xl bg-[#2E7FFF] px-4 py-2 text-[11px] font-black text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF] disabled:cursor-not-allowed disabled:bg-[#1A3356] disabled:text-[#7891B0] disabled:shadow-none">
+                            <Sparkles size={13} />
+                            Generate RFQ
+                          </button>
+                        </div>
+                        <div className="rounded-2xl border border-dashed border-[#2E7FFF]/28 bg-[#0D1E3A] p-5 text-[12px] leading-6 text-[#9CB1CC]">
+                          Provide a project anchor and one source of scope: tell AI, select a template, or upload/paste scope documents.
+                        </div>
+                      </>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="rounded-2xl border border-emerald-300/24 bg-emerald-400/10 p-4 shadow-[0_0_28px_rgba(16,185,129,0.10)]">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-[260px] flex-1">
+                              <div className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-200">Generated package ready</div>
+                              <input
+                                value={rfqPackage.title}
+                                onChange={event => patchRfqPackage({ title: event.target.value })}
+                                className="mt-2 w-full rounded-xl border border-emerald-300/20 bg-[#07111F] px-3 py-2 text-xl font-black leading-7 text-[#EEF3FA] outline-none focus:border-emerald-200/55"
+                              />
+                              <textarea
+                                value={rfqPackage.summary}
+                                onChange={event => patchRfqPackage({ summary: event.target.value })}
+                                className="mt-2 min-h-[70px] w-full resize-y rounded-xl border border-emerald-300/20 bg-[#07111F] px-3 py-2 text-[12px] leading-5 text-[#C8D8EE] outline-none focus:border-emerald-200/55"
+                              />
+                            </div>
+                            <button type="button" onClick={generateRfqPackage} disabled={!canGenerateRfq} className="inline-flex items-center gap-2 rounded-xl border border-[#2E7FFF]/24 bg-[#07111F] px-3 py-2 text-[11px] font-bold text-[#BFD8FF] transition-colors hover:bg-[#2E7FFF]/12 hover:text-white disabled:cursor-not-allowed disabled:text-[#5A7393]">
+                              <Sparkles size={13} />
+                              Regenerate
+                            </button>
+                          </div>
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            {rfqPackage.actions.map(action => (
+                              <button key={action} type="button" onClick={() => runRfqAction(action)} className="rounded-xl border border-emerald-300/24 bg-[#07111F] px-3 py-2 text-[11px] font-bold text-emerald-100 transition-all hover:border-emerald-200/50 hover:bg-emerald-400/12">
+                                {action}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        {[
+                          ['Project / Property Context', 'contextLines', rfqPackage.contextLines],
+                          ['Scope of Services', 'scopeLines', rfqPackage.scopeLines],
+                          ['Vendor Response Fields', 'responseFields', rfqPackage.responseFields],
+                          ['Mandatory Documents', 'mandatoryDocuments', rfqPackage.mandatoryDocuments],
+                          ['SLA and Evidence Requirements', 'slaEvidence', rfqPackage.slaEvidence],
+                          ['Commercial Pricing Table', 'commercialTable', rfqPackage.commercialTable],
+                          ['Submission Rules', 'submissionRules', rfqPackage.submissionRules],
+                        ].map(([title, field, lines]) => (
+                          <div key={title as string} className="rounded-xl border border-[rgba(46,127,255,0.14)] bg-[#0D1E3A] p-3">
+                            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                              <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">{title as string}</div>
+                              <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#5F7EA2]">Editable</div>
+                            </div>
+                            <textarea
+                              value={(lines as string[]).join('\n')}
+                              onChange={event => patchRfqPackageLines(field as RfqPackageLineField, event.target.value)}
+                              className="min-h-[118px] w-full resize-y rounded-xl border border-[rgba(46,127,255,0.18)] bg-[#07111F] px-3 py-2 text-[11px] leading-5 text-[#C8D8EE] outline-none focus:border-[#2E7FFF]/60"
+                            />
+                          </div>
+                        ))}
+                        <div className="rounded-xl border border-[rgba(46,127,255,0.14)] bg-[#0D1E3A] p-3">
+                          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Evaluation Scoring Matrix</div>
+                            <div className={`rounded-full border px-3 py-1 text-[10px] font-black ${
+                              rfqPackageScoringTotal === 100
+                                ? 'border-emerald-300/24 bg-emerald-400/10 text-emerald-200'
+                                : 'border-amber-300/24 bg-amber-400/10 text-amber-100'
+                            }`}>
+                              Total {rfqPackageScoringTotal}%
+                            </div>
+                          </div>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            {rfqPackage.scoringMatrix.map(item => (
+                              <div key={item.label} className="rounded-xl border border-[#2E7FFF]/14 bg-[#07111F] p-3">
+                                <div className="mb-2 flex items-center justify-between gap-3">
+                                  <label className="text-[11px] font-black text-[#DDE6F8]">{item.label}</label>
+                                  <span className="text-[12px] font-black text-[#EEF3FA]">{item.weight}%</span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min="0"
+                                  max="50"
+                                  value={item.weight}
+                                  onChange={event => patchGeneratedRfqScore(item.label, event.target.value)}
+                                  className="w-full accent-[#2E7FFF]"
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+
+              <aside className="space-y-3">
+                {rfqPackage && (
+                  <div className="rounded-2xl border border-emerald-300/24 bg-emerald-400/10 p-4 shadow-[0_0_26px_rgba(16,185,129,0.10)]">
+                    <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.16em] text-emerald-200">
+                      <CheckCircle size={13} />
+                      Generated package ready
+                    </div>
+                    <p className="mt-2 text-[11px] leading-5 text-[#C8D8EE]">
+                      Review the RFQ package, then copy it, save it, or prepare the vendor invite.
+                    </p>
+                    <button type="button" onClick={viewRfqPackage} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#2E7FFF] px-3 py-2 text-[11px] font-black text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF]">
+                      View RFQ Package
+                      <ChevronRight size={13} />
+                    </button>
+                  </div>
+                )}
+                <div className="rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#0D1E3A] p-4">
+                  <div className="mb-3 text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Selected context</div>
+                  {[
+                    ['Property', rfqState.anchor.propertyName],
+                    ['Project', rfqState.anchor.projectName],
+                    ['Project type', rfqState.anchor.projectType],
+                    ['Category', rfqState.anchor.serviceCategory],
+                    ['Sites / areas', rfqState.anchor.sitesAreas],
+                    ['Mode', rfqState.mode ? rfqState.mode === 'tell' ? 'Tell AI' : rfqState.mode === 'template' ? 'Use Template' : 'Upload Scope Docs' : 'Choose next'],
+                  ].map(([label, value]) => (
+                    <div key={label} className="border-b border-[rgba(46,127,255,0.10)] py-2 last:border-b-0">
+                      <div className="text-[9px] font-black uppercase tracking-[0.14em] text-[#7A94B4]">{label}</div>
+                      <div className="mt-1 text-[12px] font-bold leading-5 text-[#EEF3FA]">{value || 'Not set'}</div>
+                    </div>
+                  ))}
+                </div>
+                {!rfqPackage && (
+                  <div className="rounded-2xl border border-emerald-400/18 bg-emerald-400/8 p-4">
+                    <div className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-200">Ready checks</div>
+                    <div className="mt-3 space-y-2">
+                      {[
+                        ['Project selected', Boolean(rfqState.anchor.projectName)],
+                        ['Sites confirmed', Boolean(rfqState.anchor.sitesAreas)],
+                        ['Creation mode selected', Boolean(rfqState.mode)],
+                        ['Scope source provided', canGenerateRfq],
+                      ].map(([label, done]) => (
+                        <div key={label as string} className="flex items-center gap-2 text-[11px] text-[#C8D8EE]">
+                          <CheckCircle size={12} className={done ? 'text-emerald-300' : 'text-[#415A76]'} />
+                          {label as string}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {selectedRfqTemplate && (
+                  <div className="rounded-2xl border border-violet-300/18 bg-violet-400/10 p-4">
+                    <div className="text-[10px] font-black uppercase tracking-[0.16em] text-violet-100">Template selected</div>
+                    <div className="mt-1 text-[13px] font-black text-[#EEF3FA]">{selectedRfqTemplate.label}</div>
+                    <p className="mt-2 text-[11px] leading-5 text-[#C8D8EE]">Defaults are editable in the next steps.</p>
+                  </div>
+                )}
+                {rfqFeedback && (
+                  <div className="rounded-2xl border border-[#2E7FFF]/22 bg-[#2E7FFF]/10 p-4 text-[12px] font-bold text-[#BFD8FF]">{rfqFeedback}</div>
+                )}
+              </aside>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[rgba(46,127,255,0.14)] pt-4">
+              <div className="text-[11px] text-[#7A94B4]">
+                {rfqPackage ? 'RFQ package generated and ready to review.' : canGenerateRfq ? 'Ready to generate once you reach Review.' : 'Complete the project anchor and provide scope through one creation mode.'}
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={rfqCurrentStepIndex === 0 ? onClose : () => patchRfq({ step: rfqStepOrder[Math.max(0, rfqCurrentStepIndex - 1)] })} className="rounded-xl border border-[rgba(46,127,255,0.18)] bg-[#07111F] px-4 py-2 text-[12px] font-semibold text-[#8AA6C8] transition-all hover:bg-white/5 hover:text-white">
+                  {rfqCurrentStepIndex === 0 ? 'Cancel' : 'Back'}
+                </button>
+                {rfqState.step === 'review' ? (
+                  <button type="button" onClick={generateRfqPackage} disabled={!canGenerateRfq} className="rounded-xl bg-[#2E7FFF] px-5 py-2 text-[12px] font-bold text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF] disabled:cursor-not-allowed disabled:bg-[#1A3356] disabled:text-[#7891B0] disabled:shadow-none">
+                    {rfqPackage ? 'Regenerate RFQ' : 'Generate RFQ'}
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => patchRfq({ step: rfqStepOrder[Math.min(rfqStepOrder.length - 1, rfqCurrentStepIndex + 1)] })} className="rounded-xl bg-[#2E7FFF] px-5 py-2 text-[12px] font-bold text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF]">
+                    Continue
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : isBackgroundMode ? (
+          <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-5">
+            <div className="grid gap-3 md:grid-cols-4">
+              {[
+                { id: 'vendor' as const, label: '1 Vendor', value: researchState.vendorName || 'required' },
+                { id: 'sources' as const, label: '2 Sources', value: `${researchSourceCount} source${researchSourceCount === 1 ? '' : 's'}` },
+                { id: 'checks' as const, label: '3 Checks', value: `${researchState.selectedChecks.length} selected` },
+                { id: 'report' as const, label: '4 Report', value: researchReport ? `${researchReport.riskScore}/100` : 'generate' },
+              ].map(step => (
+                <button
+                  key={step.id}
+                  type="button"
+                  onClick={() => patchResearch({ step: step.id })}
+                  className={`rounded-xl border p-3 text-left transition-all ${
+                    researchState.step === step.id
+                      ? 'border-[#2E7FFF]/48 bg-[#2E7FFF]/16 shadow-[0_0_22px_rgba(46,127,255,0.10)]'
+                      : 'border-[rgba(46,127,255,0.14)] bg-[#07111F] hover:border-[#2E7FFF]/32'
+                  }`}
+                >
+                  <div className={`text-[10px] font-black uppercase tracking-[0.16em] ${researchState.step === step.id ? 'text-[#8DBDFF]' : 'text-[#7A94B4]'}`}>{step.label}</div>
+                  <div className="mt-1 text-[11px] leading-4 text-[#C8D8EE]">{step.value}</div>
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-4 grid gap-4 lg:grid-cols-[0.72fr_0.28fr]">
+              <div className="rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#07111F] p-4">
+                {researchState.step === 'vendor' && (
+                  <div>
+                    <div className="mb-4">
+                      <div className="text-[10px] font-black uppercase tracking-[0.18em] text-[#8DBDFF]">Vendor details</div>
+                      <h4 className="mt-1 text-lg font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Anchor the company being checked</h4>
+                      <p className="mt-1 text-[12px] leading-5 text-[#9CB1CC]">Confirm the identity, scope, and contact details before the report is generated.</p>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <VendorWizardField label="Vendor name">
+                        <VendorWizardInput value={researchState.vendorName} onChange={event => patchResearch({ vendorName: event.target.value })} />
+                      </VendorWizardField>
+                      <VendorWizardField label="Legal name">
+                        <VendorWizardInput value={researchState.legalName} onChange={event => patchResearch({ legalName: event.target.value })} />
+                      </VendorWizardField>
+                      <VendorWizardField label="Website">
+                        <VendorWizardInput value={researchState.website} onChange={event => patchResearch({ website: event.target.value })} placeholder="https://vendor.com" />
+                      </VendorWizardField>
+                      <VendorWizardField label="Country">
+                        <VendorWizardInput value={researchState.country} onChange={event => patchResearch({ country: event.target.value })} />
+                      </VendorWizardField>
+                      <VendorWizardField label="Registration / trade licence">
+                        <VendorWizardInput value={researchState.registrationNumber} onChange={event => patchResearch({ registrationNumber: event.target.value })} placeholder="Licence or registry number" />
+                      </VendorWizardField>
+                      <VendorWizardField label="Service category">
+                        <VendorWizardSelect value={researchState.serviceCategory} onChange={event => patchResearch({ serviceCategory: event.target.value })}>
+                          {['FM & HVAC', 'FM & Electrical', 'MEP & Systems', 'Cleaning & Soft FM', 'Security', 'Landscaping', 'Fire & Safety', 'Elevators & Lifts', 'Engineering & Civil', 'General FM'].map(category => (
+                            <option key={category} value={category}>{category}</option>
+                          ))}
+                        </VendorWizardSelect>
+                      </VendorWizardField>
+                      <VendorWizardField label="Contact name">
+                        <VendorWizardInput value={researchState.contactName} onChange={event => patchResearch({ contactName: event.target.value })} />
+                      </VendorWizardField>
+                      <VendorWizardField label="Contact email">
+                        <VendorWizardInput value={researchState.contactEmail} onChange={event => patchResearch({ contactEmail: event.target.value })} />
+                      </VendorWizardField>
+                      <VendorWizardField label="Current / known scope">
+                        <textarea value={researchState.currentScope} onChange={event => patchResearch({ currentScope: event.target.value })} className="min-h-[92px] w-full resize-none rounded-xl border border-[rgba(46,127,255,0.22)] bg-[#07111F] px-3 py-2.5 text-[12px] leading-5 text-[#EEF3FA] outline-none focus:border-[#2E7FFF]" />
+                      </VendorWizardField>
+                      <VendorWizardField label="Target decision / scope">
+                        <textarea value={researchState.targetScope} onChange={event => patchResearch({ targetScope: event.target.value })} className="min-h-[92px] w-full resize-none rounded-xl border border-[rgba(46,127,255,0.22)] bg-[#07111F] px-3 py-2.5 text-[12px] leading-5 text-[#EEF3FA] outline-none focus:border-[#2E7FFF]" />
+                      </VendorWizardField>
+                    </div>
+                  </div>
+                )}
+
+                {researchState.step === 'sources' && (
+                  <div>
+                    <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-[10px] font-black uppercase tracking-[0.18em] text-[#8DBDFF]">Source intake</div>
+                        <h4 className="mt-1 text-lg font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Add evidence for the research report</h4>
+                        <p className="mt-1 text-[12px] leading-5 text-[#9CB1CC]">Provide URLs, documents, notes, and references. The app does not fetch URLs in this version.</p>
+                      </div>
+                      <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-[#2E7FFF]/30 bg-[#2E7FFF]/14 px-4 py-2.5 text-[12px] font-black text-[#BFD8FF] transition-all hover:bg-[#2E7FFF]/22 hover:text-white">
+                        <UploadCloud size={14} />
+                        Upload documents
+                        <input type="file" multiple accept=".pdf,.doc,.docx,.txt,.csv,.md,.json,.png,.jpg,.jpeg" onChange={addResearchDocuments} className="hidden" />
+                      </label>
+                    </div>
+                    <div className="grid gap-3">
+                      <VendorWizardField label="Public-source URLs">
+                        <textarea value={researchState.publicUrls} onChange={event => patchResearch({ publicUrls: event.target.value })} placeholder="One URL per line: website, registry profile, LinkedIn, authority listing, news, references..." className="min-h-[96px] w-full resize-none rounded-xl border border-[rgba(46,127,255,0.22)] bg-[#050C17] px-3 py-2.5 text-[12px] leading-5 text-[#EEF3FA] outline-none placeholder:text-[#4A6480] focus:border-[#2E7FFF]" />
+                      </VendorWizardField>
+                      <VendorWizardField label="Known references / clients">
+                        <textarea value={researchState.references} onChange={event => patchResearch({ references: event.target.value })} placeholder="Paste known reference clients, comparable projects, contact names, or completion evidence." className="min-h-[76px] w-full resize-none rounded-xl border border-[rgba(46,127,255,0.22)] bg-[#050C17] px-3 py-2.5 text-[12px] leading-5 text-[#EEF3FA] outline-none placeholder:text-[#4A6480] focus:border-[#2E7FFF]" />
+                      </VendorWizardField>
+                      <VendorWizardField label="Research notes">
+                        <textarea value={researchState.notes} onChange={event => patchResearch({ notes: event.target.value })} placeholder="Paste website text, registry notes, ownership notes, compliance details, incidents, complaints, financial warnings, HSE, ESG, cyber, or reference feedback." className="min-h-[128px] w-full resize-none rounded-xl border border-[rgba(46,127,255,0.22)] bg-[#050C17] px-3 py-2.5 text-[12px] leading-5 text-[#EEF3FA] outline-none placeholder:text-[#4A6480] focus:border-[#2E7FFF]" />
+                      </VendorWizardField>
+                    </div>
+                    <div className="mt-4 grid gap-2">
+                      {researchState.documents.length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-[#2E7FFF]/25 px-3 py-3 text-[11px] text-[#8AA6C8]">No documents uploaded yet.</div>
+                      ) : researchState.documents.map(doc => (
+                        <div key={doc.id} className="flex flex-wrap items-center gap-2 rounded-xl border border-[#2E7FFF]/18 bg-[#102544] px-3 py-2 text-[11px] text-[#C8D8EE]">
+                          <FileText size={13} className="text-[#8DBDFF]" />
+                          <span className="min-w-0 flex-1 truncate font-bold">{doc.name}</span>
+                          <span className="text-[#6F89AA]">{doc.sizeLabel}</span>
+                          {doc.warning && <span className="text-amber-200">{doc.warning}</span>}
+                          <button type="button" onClick={() => patchResearch({ documents: researchState.documents.filter(item => item.id !== doc.id) })} className="text-[#7A94B4] hover:text-red-300" aria-label={`Remove ${doc.name}`}>
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {researchState.step === 'checks' && (
+                  <div>
+                    <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-[10px] font-black uppercase tracking-[0.18em] text-[#8DBDFF]">Due diligence checks</div>
+                        <h4 className="mt-1 text-lg font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Select what the report should cover</h4>
+                        <p className="mt-1 text-[12px] leading-5 text-[#9CB1CC]">Full due diligence is selected by default. Turn off categories only if they are not relevant to this vendor decision.</p>
+                      </div>
+                      <button type="button" onClick={() => patchResearch({ selectedChecks: vendorResearchCheckCategories.map(category => category.id) })} className="rounded-xl border border-[#2E7FFF]/24 bg-[#2E7FFF]/10 px-3 py-2 text-[11px] font-black text-[#8DBDFF] transition-colors hover:bg-[#2E7FFF]/18">
+                        Select all
+                      </button>
+                    </div>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {vendorResearchCheckCategories.map(category => {
+                        const active = researchState.selectedChecks.includes(category.id);
+                        return (
+                          <button key={category.id} type="button" onClick={() => toggleResearchCheck(category.id)} className={`rounded-xl border p-3 text-left transition-all ${active ? 'border-emerald-400/28 bg-emerald-400/10' : 'border-[rgba(46,127,255,0.14)] bg-[#07111F] hover:border-[#2E7FFF]/35'}`}>
+                            <div className="flex items-start gap-3">
+                              {active ? <CheckCircle size={16} className="mt-0.5 text-emerald-300" /> : <XCircle size={16} className="mt-0.5 text-[#5A7393]" />}
+                              <div>
+                                <div className="text-[12px] font-black text-[#EEF3FA]">{category.label}</div>
+                                <div className="mt-1 text-[11px] leading-5 text-[#8AA6C8]">{category.detail}</div>
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {researchState.step === 'report' && (
+                  <div ref={researchReportRef}>
+                    {researchReport ? (
+                      <div className="space-y-4">
+                        <div className="rounded-2xl border border-emerald-400/25 bg-emerald-500/10 p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <div className="text-[10px] font-black uppercase tracking-[0.18em] text-emerald-200">Generated report</div>
+                              <h4 className="mt-1 text-xl font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{researchReport.title}</h4>
+                              <p className="mt-2 text-[12px] leading-5 text-[#C8D8EE]">{researchReport.summary}</p>
+                            </div>
+                            <div className="rounded-2xl border border-white/10 bg-[#07111F]/80 px-4 py-3 text-right">
+                              <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[#8AA6C8]">Decision</div>
+                              <div className="mt-1 text-[15px] font-black text-white">{researchReport.decision}</div>
+                              <div className="mt-1 text-[11px] text-[#8DBDFF]">{researchReport.riskScore}/100 / {researchReport.riskLevel} risk</div>
+                            </div>
+                          </div>
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            {researchReport.nextActions.map(action => (
+                              <button key={action} type="button" onClick={() => runResearchAction(action)} className="rounded-xl border border-[#2E7FFF]/24 bg-[#2E7FFF]/12 px-3 py-2 text-[11px] font-black text-[#BFD8FF] transition-colors hover:bg-[#2E7FFF]/20 hover:text-white">
+                                {action}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="grid gap-3 md:grid-cols-3">
+                          <VendorWizardSummaryPill label="Risk score" value={`${researchReport.riskScore}/100`} tone={researchReport.riskLevel === 'Low' ? 'green' : researchReport.riskLevel === 'Medium' ? 'amber' : 'red'} />
+                          <VendorWizardSummaryPill label="Findings" value={`${researchReport.findings.length} checks`} tone="blue" />
+                          <VendorWizardSummaryPill label="Missing docs" value={`${researchReport.missingDocuments.length}`} tone={researchReport.missingDocuments.length ? 'amber' : 'green'} />
+                        </div>
+
+                        <section className="rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#0D1E3A] p-4">
+                          <div className="mb-3 text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Findings</div>
+                          <div className="grid gap-2">
+                            {researchReport.findings.map(finding => (
+                              <div key={finding.category} className="rounded-xl border border-[rgba(46,127,255,0.14)] bg-[#07111F] p-3">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className={`rounded-full border px-2.5 py-1 text-[9px] font-black ${finding.status === 'Clear' ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200' : finding.status === 'Watch' ? 'border-amber-400/25 bg-amber-400/10 text-amber-200' : 'border-red-400/25 bg-red-400/10 text-red-200'}`}>{finding.status}</span>
+                                  <div className="text-[12px] font-black text-[#EEF3FA]">{finding.category}</div>
+                                </div>
+                                <p className="mt-2 text-[12px] leading-5 text-[#C8D8EE]">{finding.finding}</p>
+                                <p className="mt-2 text-[11px] leading-5 text-[#8AA6C8]"><span className="font-black text-[#BFD8FF]">Evidence:</span> {finding.evidence}</p>
+                                <p className="mt-1 text-[11px] leading-5 text-[#8AA6C8]"><span className="font-black text-[#BFD8FF]">Action:</span> {finding.action}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </section>
+
+                        <section className="grid gap-3 md:grid-cols-2">
+                          <div className="rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#0D1E3A] p-4">
+                            <div className="mb-3 text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Source basis</div>
+                            <div className="space-y-2">
+                              {researchReport.sourceBasis.map(source => (
+                                <div key={source.id} className="rounded-xl border border-[rgba(46,127,255,0.12)] bg-[#07111F] p-3">
+                                  <div className="text-[10px] font-black uppercase tracking-[0.14em] text-[#7A94B4]">{source.type}</div>
+                                  <div className="mt-1 text-[12px] font-bold text-[#EEF3FA]">{source.label}</div>
+                                  <div className="mt-1 break-words text-[11px] leading-5 text-[#8AA6C8]">{source.detail}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#0D1E3A] p-4">
+                            <div className="mb-3 text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Required follow-up</div>
+                            <ul className="space-y-2">
+                              {(researchReport.requiredActions.length ? researchReport.requiredActions : ['Proceed with normal procurement controls.']).map(action => (
+                                <li key={action} className="flex gap-2 text-[12px] leading-5 text-[#C8D8EE]">
+                                  <CheckCircle size={12} className="mt-1 shrink-0 text-emerald-300" />
+                                  {action}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        </section>
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-dashed border-[#2E7FFF]/24 bg-[#07111F] p-8 text-center">
+                        <ShieldCheck size={28} className="mx-auto text-[#8DBDFF]" />
+                        <h4 className="mt-3 text-lg font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Ready to generate the report</h4>
+                        <p className="mx-auto mt-2 max-w-2xl text-[12px] leading-5 text-[#9CB1CC]">The report will use entered vendor details, provided URLs, uploaded documents, pasted notes, selected checks, and VendorIQ performance data.</p>
+                        <button type="button" onClick={generateVendorResearchReport} disabled={!canGenerateResearchReport} className="mt-4 rounded-xl bg-[#2E7FFF] px-5 py-2.5 text-[12px] font-bold text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF] disabled:cursor-not-allowed disabled:bg-[#1A3356] disabled:text-[#7891B0] disabled:shadow-none">
+                          Generate background report
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <aside className="rounded-2xl border border-[#2E7FFF]/18 bg-[#0D1E3A] p-4">
+                <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Review context</div>
+                <div className="mt-3 grid gap-2">
+                  <VendorWizardSummaryPill label="Vendor" value={researchState.vendorName || 'Not set'} tone="blue" />
+                  <VendorWizardSummaryPill label="Sources" value={`${researchSourceCount}`} tone={researchSourceCount ? 'green' : 'amber'} />
+                  <VendorWizardSummaryPill label="Checks" value={`${researchState.selectedChecks.length}`} tone={researchState.selectedChecks.length ? 'green' : 'red'} />
+                  <VendorWizardSummaryPill label="VendorIQ risk" value={`${focusVendor.predictedRisk30d}% / ${focusVendor.dependencyRisk}`} tone={focusVendor.predictedRisk30d >= 35 || focusVendor.dependencyRisk === 'Critical' ? 'red' : 'amber'} />
+                </div>
+                <div className="mt-4 rounded-xl border border-[rgba(46,127,255,0.14)] bg-[#07111F] p-3">
+                  <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[#7A94B4]">Source basis</div>
+                  <p className="mt-2 text-[11px] leading-5 text-[#C8D8EE]">Based on entered vendor details, provided URLs, uploaded documents, pasted notes, and VendorIQ performance data.</p>
+                </div>
+                {researchFeedback && (
+                  <div className="mt-4 rounded-xl border border-emerald-400/22 bg-emerald-500/10 p-3 text-[11px] leading-5 text-emerald-100">
+                    {researchFeedback}
+                  </div>
+                )}
+              </aside>
+            </div>
+
+            <div className="sticky bottom-0 mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-[rgba(46,127,255,0.14)] bg-[#081528]/95 pt-4 backdrop-blur">
+              <div className="text-[11px] text-[#8AA6C8]">
+                {researchReport ? 'Background report generated and ready to review.' : canGenerateResearchReport ? 'Ready to generate once you reach Report.' : 'Complete vendor details and select at least one check.'}
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={researchCurrentStepIndex === 0 ? onClose : () => patchResearch({ step: researchStepOrder[Math.max(0, researchCurrentStepIndex - 1)] })} className="rounded-xl border border-[rgba(46,127,255,0.18)] bg-[#07111F] px-4 py-2 text-[12px] font-semibold text-[#8AA6C8] transition-all hover:bg-white/5 hover:text-white">
+                  {researchCurrentStepIndex === 0 ? 'Cancel' : 'Back'}
+                </button>
+                {researchState.step === 'report' ? (
+                  <button type="button" onClick={generateVendorResearchReport} disabled={!canGenerateResearchReport} className="rounded-xl bg-[#2E7FFF] px-5 py-2 text-[12px] font-bold text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF] disabled:cursor-not-allowed disabled:bg-[#1A3356] disabled:text-[#7891B0] disabled:shadow-none">
+                    {researchReport ? 'Regenerate report' : 'Generate report'}
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => patchResearch({ step: researchStepOrder[Math.min(researchStepOrder.length - 1, researchCurrentStepIndex + 1)] })} className="rounded-xl bg-[#2E7FFF] px-5 py-2 text-[12px] font-bold text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF]">
+                    Continue
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : isActionPackMode ? (
+          <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-5">
+            <div className="grid gap-3 sm:grid-cols-4">
+              {actionPackStepOrder.map((step, index) => (
+                <button
+                  key={step}
+                  type="button"
+                  onClick={() => patchActionPack({ step })}
+                  className={`rounded-xl border p-3 text-left transition-all ${
+                    actionPackState.step === step
+                      ? 'border-emerald-400/28 bg-emerald-400/10 text-emerald-100'
+                      : index < actionPackCurrentStepIndex
+                        ? 'border-[#2E7FFF]/28 bg-[#2E7FFF]/12 text-[#BFD8FF]'
+                        : 'border-[rgba(46,127,255,0.16)] bg-[#07111F] text-[#8AA6C8] hover:border-[#2E7FFF]/35'
+                  }`}
+                >
+                  <div className="text-[10px] font-black uppercase">{index + 1}</div>
+                  <div className="mt-2 text-[12px] font-black capitalize">{step}</div>
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_320px]">
+              <div className="rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#07111F] p-5">
+                {actionPackState.step === 'vendor' && (
+                  <div>
+                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-[#8DBDFF]">Vendor</div>
+                    <h4 className="mt-1 text-lg font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Choose who this action pack is for</h4>
+                    <p className="mt-1 text-[12px] leading-5 text-[#9CB1CC]">The suggested vendor is preselected, but the pack will use whichever vendor you choose here.</p>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      <VendorWizardField label="Vendor">
+                        {allowVendorSwitch ? (
+                          <VendorWizardSelect value={actionPackState.vendorId} onChange={event => changeActionPackVendor(event.target.value)}>
+                            {vendors.map(vendor => (
+                              <option key={vendor.id} value={vendor.id}>{vendor.name} - {vendor.category}</option>
+                            ))}
+                          </VendorWizardSelect>
+                        ) : (
+                          <VendorWizardInput value={actionPackVendor.name} readOnly />
+                        )}
+                      </VendorWizardField>
+                      <VendorWizardField label="Service category">
+                        <VendorWizardInput value={actionPackVendor.category} readOnly />
+                      </VendorWizardField>
+                    </div>
+                    <div className="mt-4 grid gap-3 md:grid-cols-4">
+                      <VendorWizardSummaryPill label="Score" value={`${actionPackScore}/100`} tone={actionPackRisk === 'Preferred' ? 'green' : actionPackRisk === 'Watchlist' ? 'amber' : 'red'} />
+                      <VendorWizardSummaryPill label="SLA" value={`${actionPackVendor.slaCompliance}%`} tone={actionPackVendor.slaCompliance >= 85 ? 'green' : 'amber'} />
+                      <VendorWizardSummaryPill label="Evidence" value={`${actionPackVendor.evidenceCompliance}%`} tone={actionPackVendor.evidenceCompliance >= 85 ? 'green' : 'amber'} />
+                      <VendorWizardSummaryPill label="Dependency" value={actionPackVendor.dependencyRisk} tone={actionPackVendor.dependencyRisk === 'Low' || actionPackVendor.dependencyRisk === 'Medium' ? 'amber' : 'red'} />
+                    </div>
+                    <div className="mt-4 rounded-xl border border-[#2E7FFF]/18 bg-[#0D1E3A] p-3 text-[12px] leading-5 text-[#C8D8EE]">
+                      {actionPackVendor.dependencyNote}
+                    </div>
+                  </div>
+                )}
+
+                {actionPackState.step === 'outcome' && (
+                  <div>
+                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-[#8DBDFF]">Outcome</div>
+                    <h4 className="mt-1 text-lg font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Set the recovery objective</h4>
+                    <div className="mt-4 grid gap-3 md:grid-cols-3">
+                      {(['Operational recovery', 'Commercial negotiation', 'Compliance escalation'] as VendorActionPackObjective[]).map(objective => (
+                        <button
+                          key={objective}
+                          type="button"
+                          onClick={() => patchActionPack({ objective })}
+                          className={`rounded-xl border p-3 text-left transition-all ${actionPackState.objective === objective ? 'border-emerald-400/28 bg-emerald-400/10' : 'border-[#2E7FFF]/16 bg-[#0D1E3A] hover:border-[#2E7FFF]/35'}`}
+                        >
+                          <Target size={16} className={actionPackState.objective === objective ? 'text-emerald-300' : 'text-[#8DBDFF]'} />
+                          <div className="mt-3 text-[12px] font-black text-[#EEF3FA]">{objective}</div>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      <VendorWizardField label="Urgency">
+                        <VendorWizardSelect value={actionPackState.urgency} onChange={event => patchActionPack({ urgency: event.target.value as VendorActionPackWizardState['urgency'] })}>
+                          <option>High</option>
+                          <option>Medium</option>
+                          <option>Low</option>
+                        </VendorWizardSelect>
+                      </VendorWizardField>
+                      <VendorWizardField label="Response deadline">
+                        <VendorWizardInput value={actionPackState.responseDeadline} onChange={event => patchActionPack({ responseDeadline: event.target.value })} />
+                      </VendorWizardField>
+                      <VendorWizardField label="Owner">
+                        <VendorWizardInput value={actionPackState.owner} onChange={event => patchActionPack({ owner: event.target.value })} />
+                      </VendorWizardField>
+                      <VendorWizardField label="Audience">
+                        <VendorWizardInput value={actionPackState.audience} onChange={event => patchActionPack({ audience: event.target.value })} />
+                      </VendorWizardField>
+                      <div className="md:col-span-2">
+                        <VendorWizardField label="Recovery notes">
+                          <textarea value={actionPackState.recoveryNotes} onChange={event => patchActionPack({ recoveryNotes: event.target.value })} placeholder="Add site-specific constraints, client pressure, recovery commitments, or internal instructions." className="min-h-[96px] w-full rounded-xl border border-[rgba(46,127,255,0.22)] bg-[#0D1E3A] px-3 py-2.5 text-[12px] leading-5 text-[#EEF3FA] outline-none transition-all placeholder:text-[#5A7393] focus:border-[#2E7FFF]" />
+                        </VendorWizardField>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {actionPackState.step === 'targets' && (
+                  <div>
+                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-[#8DBDFF]">KPI targets</div>
+                    <h4 className="mt-1 text-lg font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Tune the measurable commitments</h4>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      <VendorWizardField label="SLA target %">
+                        <VendorWizardInput type="number" min="0" max="100" value={actionPackState.slaTarget} onChange={event => patchActionPack({ slaTarget: Number(event.target.value) || 0 })} />
+                      </VendorWizardField>
+                      <VendorWizardField label="Repeat failure target %">
+                        <VendorWizardInput type="number" min="0" max="100" value={actionPackState.repeatFailureTarget} onChange={event => patchActionPack({ repeatFailureTarget: Number(event.target.value) || 0 })} />
+                      </VendorWizardField>
+                      <VendorWizardField label="Evidence target %">
+                        <VendorWizardInput type="number" min="0" max="100" value={actionPackState.evidenceTarget} onChange={event => patchActionPack({ evidenceTarget: Number(event.target.value) || 0 })} />
+                      </VendorWizardField>
+                      <VendorWizardField label="Cost guardrail AED/job">
+                        <VendorWizardInput type="number" min="0" value={actionPackState.costGuardrail} onChange={event => patchActionPack({ costGuardrail: Number(event.target.value) || 0 })} />
+                      </VendorWizardField>
+                      <div className="md:col-span-2">
+                        <VendorWizardField label="Response cadence">
+                          <VendorWizardInput value={actionPackState.responseCadence} onChange={event => patchActionPack({ responseCadence: event.target.value })} />
+                        </VendorWizardField>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {actionPackState.step === 'review' && (
+                  <div ref={actionPackReviewRef}>
+                    {actionPack ? (
+                      <div className="space-y-4">
+                        <div className="rounded-2xl border border-emerald-400/25 bg-emerald-500/10 p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <div className="text-[10px] font-black uppercase tracking-[0.18em] text-emerald-200">Generated action pack</div>
+                              <h4 className="mt-1 text-xl font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{actionPack.title}</h4>
+                              <p className="mt-2 text-[12px] leading-5 text-[#C8D8EE]">{actionPack.summary}</p>
+                            </div>
+                            <div className="rounded-2xl border border-white/10 bg-[#07111F]/80 px-4 py-3 text-right">
+                              <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[#8AA6C8]">Urgency</div>
+                              <div className="mt-1 text-[15px] font-black text-white">{actionPack.urgency}</div>
+                              <div className="mt-1 text-[11px] text-[#8DBDFF]">{actionPack.objective}</div>
+                            </div>
+                          </div>
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            {actionPack.nextActions.map(action => (
+                              <button key={action} type="button" onClick={() => runActionPackAction(action)} className="rounded-xl border border-[#2E7FFF]/24 bg-[#2E7FFF]/12 px-3 py-2 text-[11px] font-black text-[#BFD8FF] transition-colors hover:bg-[#2E7FFF]/20 hover:text-white">
+                                {action}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <section className="rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#0D1E3A] p-4">
+                          <div className="mb-3 text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Manager summary</div>
+                          <p className="text-[12px] leading-6 text-[#DDE6F8]">{actionPack.managerSummary}</p>
+                        </section>
+
+                        <section className="grid gap-3 lg:grid-cols-2">
+                          <div className="rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#0D1E3A] p-4">
+                            <div className="mb-3 text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Vendor notice</div>
+                            <pre className="whitespace-pre-wrap rounded-xl border border-[#2E7FFF]/14 bg-[#07111F] p-3 text-[11px] leading-5 text-[#DDE6F8]">{actionPack.vendorNotice}</pre>
+                          </div>
+                          <div className="rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#0D1E3A] p-4">
+                            <div className="mb-3 text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Local action queue</div>
+                            <div className="space-y-2">
+                              {actionPack.localActionQueue.map(item => (
+                                <div key={`${item.title}-${item.owner}`} className="rounded-xl border border-[#2E7FFF]/14 bg-[#07111F] p-3">
+                                  <div className="text-[12px] font-black text-[#EEF3FA]">{item.title}</div>
+                                  <div className="mt-1 text-[11px] text-[#8AA6C8]">{item.owner} / {item.due} / {item.channel}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </section>
+
+                        <section className="grid gap-3 lg:grid-cols-2">
+                          <div className="rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#0D1E3A] p-4">
+                            <div className="mb-3 text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">KPI targets</div>
+                            <div className="space-y-2">
+                              {actionPack.kpiTargets.map(target => (
+                                <div key={target.label} className="grid grid-cols-[1fr_auto_auto] gap-3 rounded-xl border border-[#2E7FFF]/14 bg-[#07111F] p-3 text-[11px]">
+                                  <span className="font-bold text-[#EEF3FA]">{target.label}</span>
+                                  <span className="text-[#8AA6C8]">{target.current}</span>
+                                  <span className="font-black text-emerald-200">{target.target}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#0D1E3A] p-4">
+                            <div className="mb-3 text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Evidence and timeline</div>
+                            <ul className="space-y-2">
+                              {[...actionPack.followUpTimeline, ...actionPack.evidenceRequests.slice(0, 4)].map(item => (
+                                <li key={item} className="flex gap-2 text-[12px] leading-5 text-[#C8D8EE]">
+                                  <CheckCircle size={12} className="mt-1 shrink-0 text-emerald-300" />
+                                  {item}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        </section>
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-dashed border-[#2E7FFF]/24 bg-[#07111F] p-8 text-center">
+                        <Target size={28} className="mx-auto text-[#8DBDFF]" />
+                        <h4 className="mt-3 text-lg font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Ready to generate the action pack</h4>
+                        <p className="mx-auto mt-2 max-w-2xl text-[12px] leading-5 text-[#9CB1CC]">The pack will use the selected vendor, recovery objective, urgency, owner, KPI targets, and VendorIQ performance data.</p>
+                        <button type="button" onClick={generateVendorActionPack} disabled={!canGenerateActionPack} className="mt-4 rounded-xl bg-[#2E7FFF] px-5 py-2.5 text-[12px] font-bold text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF] disabled:cursor-not-allowed disabled:bg-[#1A3356] disabled:text-[#7891B0] disabled:shadow-none">
+                          Generate action pack
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <aside className="rounded-2xl border border-[#2E7FFF]/18 bg-[#0D1E3A] p-4">
+                <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Selected context</div>
+                <div className="mt-3 grid gap-2">
+                  <VendorWizardSummaryPill label="Vendor" value={actionPackVendor.name} tone="blue" />
+                  <VendorWizardSummaryPill label="Objective" value={actionPackState.objective} tone="purple" />
+                  <VendorWizardSummaryPill label="Risk" value={`${actionPackScore}/100 ${actionPackRisk}`} tone={actionPackRisk === 'Preferred' ? 'green' : actionPackRisk === 'Watchlist' ? 'amber' : 'red'} />
+                  <VendorWizardSummaryPill label="Deadline" value={actionPackState.responseDeadline || 'Not set'} tone="amber" />
+                </div>
+                <div className="mt-4 rounded-xl border border-[rgba(46,127,255,0.14)] bg-[#07111F] p-3">
+                  <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[#7A94B4]">Manager output</div>
+                  <p className="mt-2 text-[11px] leading-5 text-[#C8D8EE]">Generates a vendor notice, approval route, KPI targets, local action queue, follow-up timeline, and evidence requests.</p>
+                </div>
+                {actionPackFeedback && (
+                  <div className="mt-4 rounded-xl border border-emerald-400/22 bg-emerald-500/10 p-3 text-[11px] leading-5 text-emerald-100">
+                    {actionPackFeedback}
+                  </div>
+                )}
+              </aside>
+            </div>
+
+            <div className="sticky bottom-0 mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-[rgba(46,127,255,0.14)] bg-[#081528]/95 pt-4 backdrop-blur">
+              <div className="text-[11px] text-[#8AA6C8]">
+                {actionPack ? 'Action pack generated and ready to review.' : canGenerateActionPack ? 'Ready to generate once you reach Review.' : 'Select a vendor, owner, deadline, and KPI targets.'}
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={actionPackCurrentStepIndex === 0 ? onClose : () => patchActionPack({ step: actionPackStepOrder[Math.max(0, actionPackCurrentStepIndex - 1)] })} className="rounded-xl border border-[rgba(46,127,255,0.18)] bg-[#07111F] px-4 py-2 text-[12px] font-semibold text-[#8AA6C8] transition-all hover:bg-white/5 hover:text-white">
+                  {actionPackCurrentStepIndex === 0 ? 'Cancel' : 'Back'}
+                </button>
+                {actionPackState.step === 'review' ? (
+                  <button type="button" onClick={generateVendorActionPack} disabled={!canGenerateActionPack} className="rounded-xl bg-[#2E7FFF] px-5 py-2 text-[12px] font-bold text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF] disabled:cursor-not-allowed disabled:bg-[#1A3356] disabled:text-[#7891B0] disabled:shadow-none">
+                    {actionPack ? 'Regenerate pack' : 'Generate action pack'}
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => patchActionPack({ step: actionPackStepOrder[Math.min(actionPackStepOrder.length - 1, actionPackCurrentStepIndex + 1)] })} className="rounded-xl bg-[#2E7FFF] px-5 py-2 text-[12px] font-bold text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF]">
+                    Continue
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+        <div className="grid min-h-0 flex-1 lg:grid-cols-[0.9fr_1.1fr]">
+          <div className="custom-scrollbar min-h-0 overflow-y-auto border-b border-[rgba(46,127,255,0.14)] p-5 lg:border-b-0 lg:border-r">
+            <div className="rounded-2xl border border-[#2E7FFF]/18 bg-[#07111F] p-4">
+              <div className="mb-2 text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Assistant</div>
+              <p className="text-[13px] leading-6 text-[#DDE6F8]">{assistantNote}</p>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#0D1E3A] p-4">
+              <div className="mb-3 text-[10px] font-black uppercase tracking-[0.16em] text-[#7A94B4]">Choose an outcome</div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {chips.map(chip => (
+                  <button
+                    key={chip.label}
+                    type="button"
+                    onClick={() => run(chip.action)}
+                    className={`group rounded-xl border p-2.5 text-left transition-all hover:-translate-y-0.5 hover:border-[#2E7FFF]/45 ${
+                      result.action === chip.action
+                        ? 'border-[#2E7FFF]/50 bg-[#2E7FFF]/18 shadow-[0_0_22px_rgba(46,127,255,0.16)]'
+                        : 'border-[rgba(46,127,255,0.14)] bg-[#07111F]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[#2E7FFF]/12 text-[#8DBDFF]">{chip.icon}</span>
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-black text-[#EEF3FA]">{chip.label}</div>
+                        <div className="mt-0.5 text-[9px] leading-3 text-[#8AA6C8]">{chip.detail}</div>
+                      </div>
+                      <ChevronRight size={13} className="ml-auto text-[#5A7393] transition-transform group-hover:translate-x-0.5 group-hover:text-[#8DBDFF]" />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#07111F] p-3">
+              <div className="flex items-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsListening(prev => !prev);
+                    setAssistantNote(isListening ? 'Voice paused. You can type or choose an outcome.' : 'Listening mode is ready. Speak the procurement task, then send it as text.');
+                  }}
+                  className={`grid h-12 w-12 shrink-0 place-items-center rounded-xl border transition-all ${isListening ? 'border-red-400/45 bg-red-400/14 text-red-200 shadow-lg shadow-red-500/20' : 'border-[#2E7FFF]/28 bg-[#2E7FFF]/12 text-[#8DBDFF] hover:bg-[#2E7FFF]/20'}`}
+                  aria-label={isListening ? 'Stop voice input' : 'Start voice input'}
+                >
+                  <Mic size={19} />
+                </button>
+                <label className="min-w-0 flex-1">
+                  <span className="sr-only">Type procurement request</span>
+                  <textarea
+                    value={prompt}
+                    onChange={event => setPrompt(event.target.value)}
+                    placeholder="Ask for an RFQ, quote comparison, background check, action pack..."
+                    spellCheck={false}
+                    className="min-h-[78px] w-full resize-none rounded-xl border border-[rgba(46,127,255,0.22)] bg-[#0D1E3A] px-3 py-2.5 text-[12px] leading-5 text-[#EEF3FA] outline-none transition-all placeholder:text-[#5A7393] focus:border-[#2E7FFF]"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={submitPrompt}
+                  className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-[#ED1D2E] text-white shadow-lg shadow-[#ED1D2E]/20 transition-all hover:bg-[#ff3040]"
+                  aria-label="Send procurement request"
+                >
+                  <Send size={17} />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="custom-scrollbar min-h-0 overflow-y-auto p-5">
+            {result.action === 'compare' && (
+              <div className="mb-4 rounded-2xl border border-emerald-400/22 bg-emerald-500/8 p-4">
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="inline-flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-emerald-200">
+                      <BarChart3 size={13} />
+                      Quote comparison
+                    </div>
+                    <h4 className="mt-1 text-sm font-bold text-[#EEF3FA]">Upload quotes for AI analysis</h4>
+                    <p className="mt-1 text-[11px] leading-5 text-[#9CB1CC]">
+                      Add quote files or paste supplier offers. The assistant scores price, SLA, warranty, exclusions, and award risk.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-[#2E7FFF]/30 bg-[#2E7FFF]/12 px-3 py-2 text-[11px] font-bold text-[#BFD8FF] transition-all hover:bg-[#2E7FFF]/18">
+                      <UploadCloud size={13} />
+                      Upload quotes
+                      <input
+                        type="file"
+                        multiple
+                        accept=".pdf,.doc,.docx,.txt,.csv,.md,.json,.png,.jpg,.jpeg"
+                        onChange={addQuoteDocuments}
+                        className="hidden"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={analyseQuotes}
+                      disabled={quoteDocuments.length === 0 && !quoteNotes.trim()}
+                      className="inline-flex items-center gap-2 rounded-xl bg-[#2E7FFF] px-3 py-2 text-[11px] font-bold text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF] disabled:cursor-not-allowed disabled:bg-[#1A3356] disabled:text-[#7891B0] disabled:shadow-none"
+                    >
+                      <Sparkles size={13} />
+                      Analyse quotes
+                    </button>
+                  </div>
+                </div>
+
+                <textarea
+                  value={quoteNotes}
+                  onChange={event => {
+                    setQuoteNotes(event.target.value);
+                    setQuoteAnalysis(null);
+                  }}
+                  placeholder="Paste quote text"
+                  className="min-h-[88px] w-full resize-none rounded-xl border border-[rgba(46,127,255,0.18)] bg-[#050C17] px-3 py-2.5 text-[12px] leading-relaxed text-[#EEF3FA] outline-none transition-all placeholder:text-[#4A6480] focus:border-[#2E7FFF]"
+                />
+
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {quoteDocuments.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-[#2E7FFF]/25 px-3 py-2 text-[11px] text-[#7A94B4]">
+                      No quote files added yet
+                    </div>
+                  ) : (
+                    quoteDocuments.map(doc => (
+                      <div key={doc.id} className="inline-flex items-center gap-2 rounded-lg border border-[#2E7FFF]/18 bg-[#102544] px-2.5 py-1.5 text-[10px] text-[#C8D8EE]">
+                        <FileText size={12} className="text-[#8DBDFF]" />
+                        <span className="max-w-[180px] truncate font-semibold">{doc.name}</span>
+                        <span className="text-[#6F89AA]">{doc.sizeLabel}</span>
+                        <button type="button" onClick={() => { setQuoteDocuments(prev => prev.filter(item => item.id !== doc.id)); setQuoteAnalysis(null); }} className="text-[#7A94B4] hover:text-red-300" aria-label={`Remove ${doc.name}`}>
+                          <Trash2 size={11} />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {quoteAnalysis && (
+                  <div className="mt-4 space-y-3">
+                    <div className="rounded-xl border border-emerald-400/25 bg-emerald-500/10 p-3">
+                      <div className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-200">Recommended winner</div>
+                      <div className="mt-1 text-[14px] font-black text-[#EEF3FA]">{quoteAnalysis.winner.vendorName}</div>
+                      <p className="mt-1 text-[11px] leading-5 text-[#C8D8EE]">{quoteAnalysis.summary}</p>
+                    </div>
+                    <div className="grid gap-2">
+                      {quoteAnalysis.items.map(item => (
+                        <div key={item.id} className="grid gap-2 rounded-xl border border-[rgba(46,127,255,0.14)] bg-[#07111F] p-3 sm:grid-cols-[1fr_auto] sm:items-center">
+                          <div>
+                            <div className="text-[12px] font-bold text-[#EEF3FA]">{item.vendorName}</div>
+                            <div className="mt-1 text-[10px] leading-4 text-[#8AA6C8]">
+                              {item.amount === null ? 'Price not found' : `AED ${item.amount.toLocaleString()}`} / {item.sla === null ? 'SLA not found' : `${item.sla}% SLA`} / {item.warranty} / {item.exclusions}
+                            </div>
+                            <div className="mt-1 text-[10px] text-[#C8D8EE]">{item.finding}</div>
+                          </div>
+                          <div className="flex items-center gap-2 sm:justify-end">
+                            <span className={`rounded-full border px-2 py-1 text-[9px] font-black ${item.risk === 'Low' ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200' : item.risk === 'Medium' ? 'border-amber-400/25 bg-amber-400/10 text-amber-200' : 'border-red-400/25 bg-red-400/10 text-red-200'}`}>
+                              {item.risk} risk
+                            </span>
+                            <span className="rounded-full border border-[#2E7FFF]/25 bg-[#2E7FFF]/10 px-2 py-1 text-[9px] font-black text-[#8DBDFF]">
+                              {item.score}/100
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="rounded-xl border border-[rgba(46,127,255,0.14)] bg-[#07111F] p-3">
+                      <div className="mb-2 text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">AI findings</div>
+                      <ul className="space-y-2">
+                        {quoteAnalysis.findings.map(finding => (
+                          <li key={finding} className="flex gap-2 text-[11px] leading-5 text-[#C8D8EE]">
+                            <CheckCircle size={11} className="mt-1 shrink-0 text-emerald-400" />
+                            {finding}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                )}
+
+                {(quoteDocuments.length > 0 || quoteNotes || quoteAnalysis) && (
+                  <button type="button" onClick={clearQuoteIntake} className="mt-3 text-[10px] font-bold text-[#8AA6C8] transition-colors hover:text-white">
+                    Clear quote intake
+                  </button>
+                )}
+              </div>
+            )}
+
+            <div className="rounded-2xl border border-[rgba(46,127,255,0.20)] bg-[#0D1E3A] p-4">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <div className="mb-2 text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Live work product</div>
+                  <h4 className="text-base font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{result.title}</h4>
+                  <p className="mt-2 text-[12px] leading-5 text-[#9CB1CC]">{result.summary}</p>
+                </div>
+                <span className="shrink-0 rounded-full border border-emerald-400/22 bg-emerald-400/10 px-3 py-1 text-[10px] font-black text-emerald-200">
+                  {result.status}
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                {result.sections.map(section => (
+                  <div key={section.title} className="rounded-xl border border-[rgba(46,127,255,0.12)] bg-[#07111F] p-3">
+                    <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">
+                      <ListChecks size={12} />
+                      {section.title}
+                    </div>
+                    <ul className="space-y-2">
+                      {section.lines.map(line => (
+                        <li key={line} className="flex gap-2 text-[11px] leading-5 text-[#C8D8EE]">
+                          <CheckCircle size={11} className="mt-1 shrink-0 text-emerald-400" />
+                          {line}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-3 rounded-xl border border-[#2E7FFF]/20 bg-[#2E7FFF]/10 p-3">
+                <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[#8DBDFF]">Next action</div>
+                <div className="mt-1 text-[12px] font-bold text-[#EEF3FA]">{result.primaryCta}</div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => onOpenProfile()}
+              className="mt-3 w-full rounded-xl border border-[#2E7FFF]/30 bg-[#2E7FFF]/14 px-4 py-3 text-[12px] font-black text-[#8DBDFF] transition-all hover:bg-[#2E7FFF]/22 hover:text-white"
+            >
+              Open focused vendor profile
+            </button>
+          </div>
+        </div>
+        )}
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function MiniChart({ data, field, color }: { data: { month: string; [key: string]: number | string }[]; field: string; color: string }) {
+  const values = data.map(d => d[field] as number);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const w = 220;
+  const h = 50;
+  const pad = 4;
+  const points = data.map((d, i) => {
+    const x = pad + (i / (data.length - 1)) * (w - pad * 2);
+    const y = h - pad - (((d[field] as number) - min) / range) * (h - pad * 2);
+    return `${x},${y}`;
+  }).join(' ');
+  return (
+    <div className="flex flex-col gap-1">
+      <svg width={w} height={h} className="overflow-visible">
+        <polyline points={points} fill="none" stroke={color} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+        {data.map((d, i) => {
+          const x = pad + (i / (data.length - 1)) * (w - pad * 2);
+          const y = h - pad - (((d[field] as number) - min) / range) * (h - pad * 2);
+          return <circle key={i} cx={x} cy={y} r={2.5} fill={color} />;
+        })}
+      </svg>
+      <div className="flex justify-between px-1">
+        {data.map(d => (
+          <span key={d.month} className="text-[9px] text-[#7A94B4]">{d.month}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function computePeerAvgs(vendors: VendorIntelData[]) {
+  if (vendors.length === 0) return { sla: 85, ftf: 80, evc: 85 };
+  return {
+    sla: Math.round(vendors.reduce((s, v) => s + v.slaCompliance, 0) / vendors.length),
+    ftf: Math.round(vendors.reduce((s, v) => s + v.firstTimeFixRate, 0) / vendors.length),
+    evc: Math.round(vendors.reduce((s, v) => s + v.evidenceCompliance, 0) / vendors.length),
+  };
+}
+
+function VendorDetailPage({ vendor, onBack, onToast }: { vendor: VendorIntelData; onBack: () => void; onToast: ToastFn }) {
+  const [activeSection, setActiveSection] = useState<string | null>(null);
+  const [showReassignModal, setShowReassignModal] = useState(false);
+  const [showReviewModal, setShowReviewModal] = useState(false);
+  const [selectedMetricInsight, setSelectedMetricInsight] = useState<VendorMetricInsight | null>(null);
+  const [showCopilotModal, setShowCopilotModal] = useState(false);
+  const [copilotAction, setCopilotAction] = useState<VendorCopilotAction>('rfq');
+  const [copilotModalAction, setCopilotModalAction] = useState<VendorCopilotAction>('rfq');
+  const [copilotOverride, setCopilotOverride] = useState<VendorCopilotResult | null>(null);
+  const [copilotLog, setCopilotLog] = useState<string[]>([
+    'Ready to draft RFQs, compare quotes, run checks, and prepare price actions.',
+  ]);
+  const { vendors: allVendors } = useVendors();
+
+  const score = computeVendorScore(vendor);
+  const riskLevel = classifyVendorRisk(score);
+  const projectedScore = computeVendorScore({ ...vendor, slaCompliance: vendor.projectedTrend === 'up' ? Math.min(100, vendor.slaCompliance + 3) : vendor.projectedTrend === 'down' ? Math.max(0, vendor.slaCompliance - 5) : vendor.slaCompliance });
+
+  const peerAvgs = computePeerAvgs(allVendors);
+  const rankedVendors = [...allVendors].sort((a, b) => computeVendorScore(b) - computeVendorScore(a));
+  const benchmarkRank = rankedVendors.findIndex(v => v.id === vendor.id) + 1;
+
+  const copilotResult = copilotOverride ?? buildVendorCopilotResult(vendor, allVendors, copilotAction);
+  const sections = ['Overview', 'Procurement Copilot', 'AI Insights', 'Contract Compliance', 'Cost vs Performance', 'Benchmarking', 'Predictive Risk', 'Recommendations', 'Dependency Risk'];
+  const openMetricInsight = (metricName: VendorMetricName) => setSelectedMetricInsight(buildVendorMetricInsight(vendor, metricName));
+  const runCopilotAction = (action: VendorCopilotAction) => {
+    setCopilotAction(action);
+    if (action !== 'rfq') setCopilotOverride(null);
+    setCopilotLog(prev => [
+      `${formatVendorAction(action)} for ${vendor.name}`,
+      ...prev.filter(item => item !== `${formatVendorAction(action)} for ${vendor.name}`),
+    ]);
+    onToast(`${formatVendorAction(action)} for ${vendor.name}`, action === 'background' ? 'warning' : 'success');
+  };
+  const openRfqWizard = () => {
+    setCopilotModalAction('rfq');
+    setShowCopilotModal(true);
+  };
+  const openQuoteIntake = () => {
+    setCopilotAction('compare');
+    setCopilotOverride(null);
+    setCopilotModalAction('compare');
+    setShowCopilotModal(true);
+  };
+  const openBackgroundCheck = () => {
+    setCopilotAction('background');
+    setCopilotOverride(null);
+    setCopilotModalAction('background');
+    setShowCopilotModal(true);
+  };
+  const openActionPack = () => {
+    setCopilotAction('negotiation');
+    setCopilotOverride(null);
+    setCopilotModalAction('negotiation');
+    setShowCopilotModal(true);
+  };
+  const runCopilotModalAction = (action: VendorCopilotAction) => {
+    setCopilotModalAction(action);
+    runCopilotAction(action);
+  };
+  const updateRfqWorkbench = (rfqResult: VendorCopilotResult) => {
+    setCopilotAction('rfq');
+    setCopilotOverride(rfqResult);
+    setCopilotLog(prev => [
+      `${rfqResult.title} saved for ${vendor.name}`,
+      ...prev.filter(item => item !== `${rfqResult.title} saved for ${vendor.name}`),
+    ]);
+    onToast('RFQ package saved to VendorIQ workbench', 'success');
+  };
+  const updateBackgroundWorkbench = (backgroundResult: VendorCopilotResult) => {
+    setCopilotAction('background');
+    setCopilotOverride(backgroundResult);
+    setCopilotLog(prev => [
+      `${backgroundResult.title} saved for ${vendor.name}`,
+      ...prev.filter(item => item !== `${backgroundResult.title} saved for ${vendor.name}`),
+    ]);
+    onToast('Background report saved to VendorIQ workbench', 'success');
+  };
+  const updateActionPackWorkbench = (actionPackResult: VendorCopilotResult) => {
+    setCopilotAction('negotiation');
+    setCopilotOverride(actionPackResult);
+    setCopilotLog(prev => [
+      `${actionPackResult.title} saved for ${vendor.name}`,
+      ...prev.filter(item => item !== `${actionPackResult.title} saved for ${vendor.name}`),
+    ]);
+    onToast('Action pack saved to VendorIQ workbench', 'success');
+  };
+
+  return (
+    <div className="relative h-full flex flex-col overflow-hidden">
+      <div className="flex items-center gap-3 px-5 py-3 border-b border-[rgba(46,127,255,0.15)] flex-shrink-0">
+        <button onClick={onBack} className="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center text-[#7A94B4] hover:text-white transition-all">
+          <ArrowLeft size={14} />
+        </button>
+        <div className="flex items-center gap-2.5 flex-1 min-w-0">
+          <div className="w-8 h-8 rounded-lg bg-[#2E7FFF]/15 flex items-center justify-center flex-shrink-0">
+            <ShieldCheck size={15} className="text-[#2E7FFF]" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-[#EEF3FA] font-bold text-sm truncate" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{vendor.name}</h2>
+            <p className="text-[10px] text-[#7A94B4]">{vendor.category} · {vendor.sites.join(', ')}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border ${riskBg(riskLevel)}`}>{riskLevel}</span>
+          <button
+            onClick={() => setShowReassignModal(true)}
+            className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-blue-600/20 border border-blue-500/30 text-blue-400 hover:bg-blue-600/30 transition-all"
+          >
+            Reassign Work
+          </button>
+          <button
+            onClick={() => setShowReviewModal(true)}
+            className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-amber-600/20 border border-amber-500/30 text-amber-400 hover:bg-amber-600/30 transition-all"
+          >
+            Trigger Vendor Review
+          </button>
+        </div>
+      </div>
+
+      <div className="flex gap-1 px-5 py-2 border-b border-[rgba(46,127,255,0.08)] overflow-x-auto no-scrollbar flex-shrink-0">
+        {sections.map(s => (
+          <button
+            key={s}
+            onClick={() => {
+              const el = document.getElementById(`vendor-section-${s.replace(/\s/g, '-')}`);
+              el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              setActiveSection(s);
+            }}
+            className={`text-[10px] px-3 py-1.5 rounded-lg whitespace-nowrap font-semibold transition-all flex-shrink-0 ${
+              activeSection === s ? 'bg-[#2E7FFF]/20 text-[#2E7FFF]' : 'text-[#7A94B4] hover:text-[#EEF3FA] hover:bg-white/5'
+            }`}
+          >
+            {s}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex-1 overflow-y-auto custom-scrollbar px-5 py-4 space-y-4">
+        <div id="vendor-section-Overview">
+          <DetailSection icon={<Star size={12} className="text-[#2E7FFF]" />} title="Overview">
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div className="relative col-span-2 sm:col-span-1 flex items-center gap-4 bg-[#0D1E3A] rounded-xl p-3 pr-10">
+                <VendorAIInsightBadge onClick={() => openMetricInsight('Vendor Score')} />
+                <ScoreRing score={score} size={64} />
+                <div>
+                  <div className="text-[10px] text-[#7A94B4] mb-0.5">Vendor Score</div>
+                  <div className="flex items-center gap-1.5">
+                    <TrendIcon trend={vendor.trend} size={14} />
+                    <span className="text-[11px] text-[#7A94B4]">{vendor.trend === 'up' ? 'Improving' : vendor.trend === 'down' ? 'Declining' : 'Stable'}</span>
+                  </div>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border mt-1 inline-block ${riskBg(riskLevel)}`}>{riskLevel}</span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2 col-span-2 sm:col-span-1">
+                {[
+                  { label: 'SLA Compliance', value: `${vendor.slaCompliance}%`, color: scoreColor(vendor.slaCompliance), metric: 'SLA Compliance' as const },
+                  { label: 'First-Time Fix', value: `${vendor.firstTimeFixRate}%`, color: scoreColor(vendor.firstTimeFixRate), metric: 'First-Time Fix' as const },
+                  { label: 'Avg Resolution', value: `${vendor.avgResolutionMin} min`, color: vendor.avgResolutionMin <= 45 ? '#38D98A' : vendor.avgResolutionMin <= 60 ? '#FF9B38' : '#FF4B4B', metric: 'Avg Resolution' as const },
+                  { label: 'Evidence Compliance', value: `${vendor.evidenceCompliance}%`, color: scoreColor(vendor.evidenceCompliance), metric: 'Evidence Compliance' as const },
+                ].map(k => (
+                  <div key={k.label} className="relative bg-[#0A1628] rounded-lg p-2 pr-9 text-center">
+                    <VendorAIInsightBadge onClick={() => openMetricInsight(k.metric)} />
+                    <div className="text-[12px] font-bold" style={{ color: k.color }}>{k.value}</div>
+                    <div className="text-[9px] text-[#7A94B4] mt-0.5">{k.label}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { label: 'Active Contracts', value: vendor.activeContracts, icon: <Building2 size={10} className="text-[#2E7FFF]" />, metric: 'Active Contracts' as const },
+                { label: 'Jobs Last 30d', value: vendor.jobsLast30d, icon: <CheckCircle size={10} className="text-emerald-400" />, metric: 'Jobs Last 30d' as const },
+                { label: 'Avg Cost/Job', value: `AED ${vendor.avgCostPerJob}`, icon: <DollarSign size={10} className="text-amber-400" />, metric: 'Avg Cost/Job' as const },
+              ].map(k => (
+                <div key={k.label} className="relative bg-[#0A1628] rounded-lg p-2.5 pr-10">
+                  <VendorAIInsightBadge onClick={() => openMetricInsight(k.metric)} />
+                  <div className="flex items-center gap-1 mb-1">{k.icon}<span className="text-[9px] text-[#7A94B4]">{k.label}</span></div>
+                  <div className="text-[13px] font-bold text-[#EEF3FA]">{k.value}</div>
+                </div>
+              ))}
+            </div>
+            {vendor.anomaly && (
+              <div className="mt-3 flex items-start gap-2 bg-red-500/8 border border-red-500/25 rounded-lg p-2.5">
+                <AlertTriangle size={13} className="text-red-400 flex-shrink-0 mt-0.5" />
+                <p className="text-[11px] text-red-300">{vendor.anomaly}</p>
+              </div>
+            )}
+          </DetailSection>
+        </div>
+
+        <div id="vendor-section-Procurement-Copilot">
+          <DetailSection icon={<Sparkles size={12} className="text-[#2E7FFF]" />} title="Procurement Copilot">
+            <VendorCopilotWorkbench
+              result={copilotResult}
+              log={copilotLog}
+              onRun={runCopilotAction}
+              onOpenQuoteIntake={openQuoteIntake}
+              onOpenRfqWizard={openRfqWizard}
+              onOpenBackgroundCheck={openBackgroundCheck}
+              onOpenActionPack={openActionPack}
+            />
+          </DetailSection>
+        </div>
+
+        <div id="vendor-section-AI-Insights">
+          <DetailSection icon={<Brain size={12} className="text-[#2E7FFF]" />} title="AI Insights">
+            <div className="space-y-2">
+              {vendor.insights.map((insight, i) => (
+                <div key={i} className="flex items-start gap-2 bg-[#0D1E3A] rounded-lg p-2.5">
+                  <Zap size={11} className="text-[#2E7FFF] flex-shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-[#C8D8EE] leading-relaxed">{insight}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="bg-[#0A1628] rounded-lg p-2.5">
+                <div className="text-[9px] text-[#7A94B4] mb-1.5 uppercase tracking-wide">Repeat Failure Rate</div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[13px] font-bold" style={{ color: vendor.repeatFailureRate <= 6 ? '#38D98A' : vendor.repeatFailureRate <= 10 ? '#FF9B38' : '#FF4B4B' }}>{vendor.repeatFailureRate}%</span>
+                </div>
+                <MiniBar value={vendor.repeatFailureRate} max={20} color={vendor.repeatFailureRate <= 6 ? '#38D98A' : vendor.repeatFailureRate <= 10 ? '#FF9B38' : '#FF4B4B'} />
+              </div>
+              <div className="bg-[#0A1628] rounded-lg p-2.5">
+                <div className="text-[9px] text-[#7A94B4] mb-1.5 uppercase tracking-wide">Contract Expiry</div>
+                <div className="text-[13px] font-bold text-[#EEF3FA]">{vendor.contractExpiry}</div>
+                <div className="text-[9px] text-[#7A94B4] mt-0.5">{vendor.activeContracts} active contract{vendor.activeContracts !== 1 ? 's' : ''}</div>
+              </div>
+            </div>
+          </DetailSection>
+        </div>
+
+        <div id="vendor-section-Contract-Compliance">
+          <DetailSection icon={<CheckCircle size={12} className="text-[#2E7FFF]" />} title="Contract Compliance">
+            {vendor.contractFlags.length === 0 ? (
+              <div className="flex items-center gap-2 bg-emerald-500/8 border border-emerald-500/20 rounded-lg p-3">
+                <CheckCircle size={14} className="text-emerald-400" />
+                <p className="text-[11px] text-emerald-300">No contract breaches or compliance flags. All obligations current.</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {vendor.contractFlags.map((flag, i) => (
+                  <div key={i} className={`flex items-start gap-2 rounded-lg p-2.5 border ${
+                    flag.type === 'breach' ? 'bg-red-500/8 border-red-500/25' : 'bg-amber-500/8 border-amber-500/20'
+                  }`}>
+                    {flagIcon(flag.type)}
+                    <div>
+                      <span className={`text-[9px] font-bold uppercase tracking-wide mr-2 ${flag.type === 'breach' ? 'text-red-400' : 'text-amber-400'}`}>
+                        {flag.type === 'breach' ? 'SLA Breach' : flag.type === 'missing' ? 'Missing Evidence' : 'Warning'}
+                      </span>
+                      <p className="text-[11px] text-[#C8D8EE] mt-0.5">{flag.description}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              {[
+                { label: 'SLA Compliance', value: `${vendor.slaCompliance}%`, ok: vendor.slaCompliance >= 85 },
+                { label: 'Evidence Rate', value: `${vendor.evidenceCompliance}%`, ok: vendor.evidenceCompliance >= 85 },
+                { label: 'Contract Flags', value: vendor.contractFlags.length, ok: vendor.contractFlags.length === 0 },
+              ].map(k => (
+                <div key={k.label} className="bg-[#0A1628] rounded-lg p-2 text-center">
+                  <div className={`text-[13px] font-bold ${k.ok ? 'text-emerald-400' : 'text-red-400'}`}>{k.value}</div>
+                  <div className="text-[9px] text-[#7A94B4] mt-0.5">{k.label}</div>
+                </div>
+              ))}
+            </div>
+          </DetailSection>
+        </div>
+
+        <div id="vendor-section-Cost-vs-Performance">
+          <DetailSection icon={<DollarSign size={12} className="text-[#2E7FFF]" />} title="Cost vs Performance">
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div className="bg-[#0D1E3A] rounded-xl p-3">
+                <div className="text-[9px] text-[#7A94B4] uppercase tracking-wide mb-2">Cost Trend (AED/Job)</div>
+                <MiniChart data={vendor.costTrend} field="cost" color="#FF9B38" />
+                <div className="flex items-center justify-between mt-2">
+                  <span className="text-[11px] font-bold text-amber-400">AED {vendor.avgCostPerJob}</span>
+                  <span className="text-[10px] text-[#7A94B4]">vs peer AED {vendor.costTrend[vendor.costTrend.length - 1].peerAvg}</span>
+                </div>
+              </div>
+              <div className="bg-[#0D1E3A] rounded-xl p-3">
+                <div className="text-[9px] text-[#7A94B4] uppercase tracking-wide mb-2">Score Trend</div>
+                <MiniChart data={vendor.scoreTrend} field="score" color={scoreColor(score)} />
+                <div className="flex items-center justify-between mt-2">
+                  <span className="text-[11px] font-bold" style={{ color: scoreColor(score) }}>{score} pts</span>
+                  <div className="flex items-center gap-1">
+                    <TrendIcon trend={vendor.trend} size={12} />
+                    <span className="text-[10px] text-[#7A94B4]">{vendor.trend}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="bg-[#0A1628] rounded-lg p-2.5">
+              <div className="text-[10px] text-[#7A94B4] mb-2">Cost vs Peer Average</div>
+              <div className="space-y-2">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] text-[#EEF3FA]">{vendor.name}</span>
+                    <span className="text-[10px] font-bold text-amber-400">AED {vendor.avgCostPerJob}</span>
+                  </div>
+                  <div className="h-1.5 bg-[#0D1E3A] rounded-full overflow-hidden">
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${(vendor.avgCostPerJob / 600) * 100}%` }}
+                      transition={{ duration: 0.6 }}
+                      className="h-full rounded-full bg-amber-400"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] text-[#7A94B4]">Peer Average</span>
+                    <span className="text-[10px] text-[#7A94B4]">AED {vendor.costTrend[vendor.costTrend.length - 1].peerAvg}</span>
+                  </div>
+                  <div className="h-1.5 bg-[#0D1E3A] rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-[#7A94B4]"
+                      style={{ width: `${(vendor.costTrend[vendor.costTrend.length - 1].peerAvg / 600) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </DetailSection>
+        </div>
+
+        <div id="vendor-section-Benchmarking">
+          <DetailSection icon={<BarChart3 size={12} className="text-[#2E7FFF]" />} title="Benchmarking">
+            <div className="mb-3 flex items-center gap-3 bg-[#0D1E3A] rounded-xl p-3">
+              <div className="text-center">
+                <div className="text-[22px] font-bold" style={{ color: scoreColor(score), fontFamily: 'Space Grotesk, sans-serif' }}>#{benchmarkRank}</div>
+                <div className="text-[9px] text-[#7A94B4]">of {rankedVendors.length}</div>
+              </div>
+              <div className="flex-1 space-y-1.5">
+                {rankedVendors.map((v, i) => {
+                  const vs = computeVendorScore(v);
+                  return (
+                    <div key={v.id} className={`flex items-center gap-2 rounded px-1.5 py-0.5 ${v.id === vendor.id ? 'bg-[#2E7FFF]/15' : ''}`}>
+                      <span className="text-[9px] text-[#7A94B4] w-4">#{i + 1}</span>
+                      <span className={`text-[10px] flex-1 truncate ${v.id === vendor.id ? 'text-[#EEF3FA] font-semibold' : 'text-[#7A94B4]'}`}>{v.name}</span>
+                      <div className="h-1 rounded-full overflow-hidden" style={{ width: '60px', background: '#0A1628' }}>
+                        <div className="h-full rounded-full" style={{ width: `${vs}%`, background: scoreColor(vs) }} />
+                      </div>
+                      <span className="text-[9px] font-bold w-6 text-right" style={{ color: scoreColor(vs) }}>{vs}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { label: 'SLA Compliance', value: vendor.slaCompliance, peerAvg: peerAvgs.sla },
+                { label: 'First-Time Fix', value: vendor.firstTimeFixRate, peerAvg: peerAvgs.ftf },
+                { label: 'Evidence Rate', value: vendor.evidenceCompliance, peerAvg: peerAvgs.evc },
+              ].map(k => (
+                <div key={k.label} className="bg-[#0A1628] rounded-lg p-2.5">
+                  <div className="text-[9px] text-[#7A94B4] mb-1">{k.label}</div>
+                  <div className="text-[12px] font-bold mb-1" style={{ color: scoreColor(k.value) }}>{k.value}%</div>
+                  <div className="text-[8px] text-[#7A94B4]">Peer avg: {k.peerAvg}%</div>
+                </div>
+              ))}
+            </div>
+          </DetailSection>
+        </div>
+
+        <div id="vendor-section-Predictive-Risk">
+          <DetailSection icon={<AlertTriangle size={12} className="text-[#2E7FFF]" />} title="Predictive Risk">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-[#0D1E3A] rounded-xl p-3">
+                <div className="text-[9px] text-[#7A94B4] uppercase tracking-wide mb-2">30-Day Risk Score</div>
+                <div className="flex items-end gap-2">
+                  <span className="text-[28px] font-bold" style={{ color: vendor.predictedRisk30d >= 35 ? '#FF4B4B' : vendor.predictedRisk30d >= 20 ? '#FF9B38' : '#38D98A', fontFamily: 'Space Grotesk, sans-serif' }}>
+                    {vendor.predictedRisk30d}%
+                  </span>
+                </div>
+                <div className="h-1.5 bg-[#0A1628] rounded-full overflow-hidden mt-2">
+                  <motion.div
+                    initial={{ width: 0 }}
+                    animate={{ width: `${vendor.predictedRisk30d}%` }}
+                    transition={{ duration: 0.6 }}
+                    className="h-full rounded-full"
+                    style={{ background: vendor.predictedRisk30d >= 35 ? '#FF4B4B' : vendor.predictedRisk30d >= 20 ? '#FF9B38' : '#38D98A' }}
+                  />
+                </div>
+                <p className="text-[10px] text-[#7A94B4] mt-2">
+                  {vendor.predictedRisk30d >= 35 ? 'High risk of SLA breach or contract escalation in next 30 days.' : vendor.predictedRisk30d >= 20 ? 'Moderate risk — monitor closely and prepare contingency.' : 'Low risk — current trajectory is sustainable.'}
+                </p>
+              </div>
+              <div className="bg-[#0D1E3A] rounded-xl p-3">
+                <div className="text-[9px] text-[#7A94B4] uppercase tracking-wide mb-2">Projected 30-Day Score</div>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-[28px] font-bold" style={{ color: scoreColor(projectedScore), fontFamily: 'Space Grotesk, sans-serif' }}>{projectedScore}</span>
+                  <TrendIcon trend={vendor.projectedTrend} size={18} />
+                </div>
+                <div className="text-[10px] text-[#7A94B4]">
+                  {projectedScore > score ? `+${projectedScore - score} pts projected` : projectedScore < score ? `${projectedScore - score} pts projected` : 'Score expected to remain stable'}
+                </div>
+              </div>
+            </div>
+          </DetailSection>
+        </div>
+
+        <div id="vendor-section-Recommendations">
+          <DetailSection icon={<Target size={12} className="text-[#2E7FFF]" />} title="Recommendations">
+            <div className="space-y-2.5">
+              {vendor.recommendations.map((rec, i) => (
+                <div key={i} className="bg-[#0D1E3A] rounded-xl p-3 border border-[rgba(46,127,255,0.1)]">
+                  <div className="flex items-start justify-between gap-2 mb-1.5">
+                    <span className="text-[12px] font-semibold text-[#EEF3FA]">{rec.title}</span>
+                    <span className={`text-[9px] font-bold px-2 py-0.5 rounded border flex-shrink-0 ${actionColor(rec.action)}`}>
+                      {rec.action === 'reassign' ? 'Reassign' : rec.action === 'renegotiate' ? 'Renegotiate' : rec.action === 'review' ? 'Trigger Review' : 'Limit Scope'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#7A94B4] leading-relaxed">{rec.detail}</p>
+                  {(rec.action === 'reassign' || rec.action === 'review') && (
+                    <button
+                      onClick={() => rec.action === 'reassign' ? setShowReassignModal(true) : setShowReviewModal(true)}
+                      className="mt-2 flex items-center gap-1 text-[10px] font-semibold text-[#2E7FFF] hover:text-white transition-colors"
+                    >
+                      <ChevronRight size={11} />
+                      {rec.action === 'reassign' ? 'Reassign Work Now' : 'Trigger Vendor Review'}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </DetailSection>
+        </div>
+
+        <div id="vendor-section-Dependency-Risk">
+          <DetailSection icon={<Users size={12} className="text-[#2E7FFF]" />} title="Dependency Risk">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{ background: `${dependencyColor(vendor.dependencyRisk)}18`, border: `1px solid ${dependencyColor(vendor.dependencyRisk)}30` }}>
+                <span className="text-[11px] font-bold" style={{ color: dependencyColor(vendor.dependencyRisk) }}>{vendor.dependencyRisk}</span>
+              </div>
+              <p className="text-[11px] text-[#C8D8EE] flex-1 leading-relaxed">{vendor.dependencyNote}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-[#0A1628] rounded-lg p-2.5">
+                <div className="text-[9px] text-[#7A94B4] mb-1">Sites Covered</div>
+                {vendor.sites.map(s => (
+                  <div key={s} className="flex items-center gap-1 mt-0.5">
+                    <div className="w-1 h-1 rounded-full bg-[#2E7FFF]" />
+                    <span className="text-[10px] text-[#EEF3FA]">{s}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="bg-[#0A1628] rounded-lg p-2.5">
+                <div className="text-[9px] text-[#7A94B4] mb-1">Active Contracts</div>
+                <div className="text-[20px] font-bold text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{vendor.activeContracts}</div>
+                <div className="text-[9px] text-[#7A94B4]">Expiry: {vendor.contractExpiry}</div>
+              </div>
+            </div>
+          </DetailSection>
+        </div>
+      </div>
+
+      <AnimatePresence>
+        {selectedMetricInsight && (
+          <>
+            <div className="absolute inset-0 z-30 bg-black/20" onClick={() => setSelectedMetricInsight(null)} />
+            <VendorMetricInsightPanel insight={selectedMetricInsight} onClose={() => setSelectedMetricInsight(null)} />
+          </>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showCopilotModal && (
+          <PageProcurementCopilotModal
+            focusVendor={vendor}
+            vendors={allVendors}
+            result={buildVendorCopilotResult(vendor, allVendors, copilotModalAction)}
+            onClose={() => setShowCopilotModal(false)}
+            onRun={runCopilotModalAction}
+            onOpenProfile={() => setShowCopilotModal(false)}
+            onRfqGenerated={updateRfqWorkbench}
+            onBackgroundGenerated={updateBackgroundWorkbench}
+            onActionPackGenerated={updateActionPackWorkbench}
+            allowVendorSwitch={false}
+          />
+        )}
+        {showReassignModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-black/60 flex items-center justify-center z-50 px-6"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-[#0D1E3A] border border-[rgba(46,127,255,0.3)] rounded-2xl p-5 max-w-sm w-full"
+            >
+              <h3 className="text-[#EEF3FA] font-bold text-sm mb-2" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Reassign Work — {vendor.name}</h3>
+              <p className="text-[11px] text-[#7A94B4] mb-4 leading-relaxed">
+                This will flag active jobs assigned to <strong className="text-[#EEF3FA]">{vendor.name}</strong> for reassignment to alternate vendors. Operations team will be notified to action.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => { setShowReassignModal(false); onToast(`Reassignment initiated for ${vendor.name} — Operations notified`, 'success'); }}
+                  className="flex-1 py-2 rounded-lg bg-blue-600 text-white text-[12px] font-semibold hover:bg-blue-500 transition-all"
+                >
+                  Confirm Reassignment
+                </button>
+                <button
+                  onClick={() => setShowReassignModal(false)}
+                  className="px-4 py-2 rounded-lg bg-white/5 text-[#7A94B4] text-[12px] hover:bg-white/10 transition-all"
+                >
+                  Cancel
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showReviewModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-black/60 flex items-center justify-center z-50 px-6"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-[#0D1E3A] border border-[rgba(46,127,255,0.3)] rounded-2xl p-5 max-w-sm w-full"
+            >
+              <h3 className="text-[#EEF3FA] font-bold text-sm mb-2" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Trigger Vendor Review — {vendor.name}</h3>
+              <p className="text-[11px] text-[#7A94B4] mb-4 leading-relaxed">
+                A formal performance review will be initiated for <strong className="text-[#EEF3FA]">{vendor.name}</strong>. The vendor will receive a 14-day notice to respond with a corrective action plan.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => { setShowReviewModal(false); onToast(`Vendor review triggered for ${vendor.name} — 14-day notice issued`, 'warning'); }}
+                  className="flex-1 py-2 rounded-lg bg-amber-600/80 text-white text-[12px] font-semibold hover:bg-amber-500 transition-all"
+                >
+                  Confirm Trigger
+                </button>
+                <button
+                  onClick={() => setShowReviewModal(false)}
+                  className="px-4 py-2 rounded-lg bg-white/5 text-[#7A94B4] text-[12px] hover:bg-white/10 transition-all"
+                >
+                  Cancel
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function VendorWizardField({
+  label,
+  children,
+  helper,
+}: {
+  label: string;
+  children: React.ReactNode;
+  helper?: string;
+}) {
+  return (
+    <label className="space-y-1.5">
+      <span className="block text-[9px] font-bold uppercase tracking-[0.18em] text-[#7A94B4]">{label}</span>
+      {children}
+      {helper && <span className="block text-[9px] text-[#5A7393]">{helper}</span>}
+    </label>
+  );
+}
+
+function VendorWizardInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className={`w-full rounded-xl border border-[rgba(46,127,255,0.22)] bg-[#07111F] px-3 py-2.5 text-[12px] text-[#EEF3FA] outline-none transition-all placeholder:text-[#4A6480] focus:border-[#2E7FFF] ${props.className ?? ''}`}
+    />
+  );
+}
+
+function VendorWizardSelect(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <select
+      {...props}
+      className={`w-full rounded-xl border border-[rgba(46,127,255,0.22)] bg-[#07111F] px-3 py-2.5 text-[12px] text-[#EEF3FA] outline-none transition-all focus:border-[#2E7FFF] ${props.className ?? ''}`}
+    />
+  );
+}
+
+function VendorWizardSummaryPill({ label, value, tone = 'blue' }: { label: string; value: string; tone?: 'blue' | 'green' | 'amber' | 'red' | 'purple' }) {
+  const toneCls = {
+    blue: 'border-[#2E7FFF]/25 bg-[#2E7FFF]/10 text-[#8DBDFF]',
+    green: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300',
+    amber: 'border-amber-500/25 bg-amber-500/10 text-amber-300',
+    red: 'border-red-500/25 bg-red-500/10 text-red-300',
+    purple: 'border-purple-500/25 bg-purple-500/10 text-purple-300',
+  }[tone];
+  return (
+    <div className={`rounded-xl border px-3 py-2 ${toneCls}`}>
+      <div className="text-[9px] uppercase tracking-[0.16em] opacity-70">{label}</div>
+      <div className="mt-1 text-[13px] font-bold">{value}</div>
+    </div>
+  );
+}
+
+function AddVendorWizard({
+  onClose,
+  onCreate,
+}: {
+  onClose: () => void;
+  onCreate: (vendor: VendorIntelData, source?: VendorCreateSource) => void;
+}) {
+  const [step, setStep] = useState<VendorWizardStep>(1);
+  const [form, setForm] = useState<VendorWizardForm>(aiVendorWizardForm);
+  const [setupMode, setSetupMode] = useState<VendorSetupMode>('ai');
+  const [aiDocuments, setAiDocuments] = useState<VendorSetupDocument[]>([]);
+  const [aiNotes, setAiNotes] = useState('');
+  const [aiExtractions, setAiExtractions] = useState<VendorAiExtraction[]>([]);
+  const score = vendorWizardScore(form);
+  const risk = classifyVendorRisk(score);
+  const flags = parseVendorFlags(form.contractFlags);
+  const sites = parseVendorSites(form.sites);
+  const riskTone = risk === 'Preferred' ? 'green' : risk === 'Watchlist' ? 'amber' : 'red';
+  const input = (field: keyof VendorWizardForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
+    setForm(prev => ({ ...prev, [field]: e.target.value }));
+  };
+
+  const stepCards = setupMode === 'ai'
+    ? [
+      { id: 1 as const, label: 'Import vendor context', detail: 'Docs, notes, proposal' },
+      { id: 2 as const, label: 'AI understanding', detail: 'Extract signals' },
+      { id: 3 as const, label: 'Review & correct', detail: 'Confirm fields' },
+      { id: 4 as const, label: 'Create vendor profile', detail: 'Score, risk, actions' },
+    ]
+    : [
+      { id: 1 as const, label: 'Vendor profile', detail: 'Scope, category, contacts' },
+      { id: 2 as const, label: 'Performance baseline', detail: 'Score, SLA, evidence, cost' },
+      { id: 3 as const, label: 'Compliance and risk', detail: 'Flags, dependency, prediction' },
+      { id: 4 as const, label: 'AI review', detail: 'Insights and actions' },
+    ];
+
+  const dashboardSections = [
+    { label: 'Overview', value: `${score}/100 score`, tone: riskTone },
+    { label: 'Contract Compliance', value: `${flags.length} flags`, tone: flags.length ? 'amber' : 'green' },
+    { label: 'Cost vs Performance', value: `AED ${numeric(form.avgCostPerJob, 450)}/job`, tone: 'amber' },
+    { label: 'Predictive Risk', value: `${numeric(form.predictedRisk30d, 20)}% in 30d`, tone: numeric(form.predictedRisk30d, 20) > 30 ? 'red' : 'blue' },
+    { label: 'Dependency Risk', value: form.dependencyRisk, tone: form.dependencyRisk === 'Low' ? 'green' : form.dependencyRisk === 'Medium' ? 'amber' : 'red' },
+  ] as const;
+
+  const hasAiInput = aiDocuments.length > 0 || aiNotes.trim().length > 0;
+  const extractedFieldLabels = aiExtractions.map(item => item.label.toLowerCase());
+  const extracted = (label: string) => extractedFieldLabels.some(item => item.includes(label.toLowerCase()));
+  const aiConfidence = aiExtractions.length === 0
+    ? 0
+    : Math.min(94, 52 + aiExtractions.length * 5 + Math.min(10, aiDocuments.length * 3) + (aiNotes.trim() ? 4 : 0));
+  const needsConfirmation = [
+    form.name.trim() ? null : 'Vendor name',
+    extracted('category') ? null : 'Service category',
+    extracted('SLA') ? null : 'SLA commitment',
+    extracted('evidence') ? null : 'Evidence requirement',
+    extracted('Contract expiry') ? null : 'Contract expiry',
+    extracted('Dependency risk') ? null : 'Dependency risk',
+  ].filter((item): item is string => Boolean(item));
+  const aiPhases = [
+    'Reading vendor material',
+    'Finding service scope',
+    'Detecting SLA and evidence commitments',
+    'Checking compliance and dependency risk',
+    'Preparing VendorIQ profile',
+  ];
+
+  function confidenceBadge(value: number) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-lg border border-emerald-400/25 bg-emerald-400/10 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-emerald-200">
+        <Sparkles size={11} />
+        {value}% confidence
+      </span>
+    );
+  }
+
+  function confirmationBadge(label: string, confirmed: boolean) {
+    return (
+      <span className={`inline-flex rounded-lg border px-2 py-1 text-[9px] font-black uppercase tracking-wide ${
+        confirmed
+          ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200'
+          : 'border-amber-400/25 bg-amber-400/10 text-amber-200'
+      }`}>
+        {confirmed ? 'Detected' : `${label} needs confirmation`}
+      </span>
+    );
+  }
+
+  function switchSetupMode(mode: VendorSetupMode) {
+    setSetupMode(mode);
+    setStep(1);
+    if (mode === 'manual' && setupMode === 'ai' && !form.name.trim() && aiExtractions.length === 0) setForm(initialVendorWizardForm);
+    if (mode === 'ai' && setupMode === 'manual') setForm(aiVendorWizardForm);
+  }
+
+  function submit() {
+    onCreate(buildVendorFromWizard(form), setupMode === 'ai' && hasAiInput ? 'ai' : 'manual');
+  }
+
+  async function addAiDocuments(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    if (!files.length) return;
+    const docs = await Promise.all(files.map(async file => {
+      const parsed = await parseProjectDocumentFile(file).catch(() => null);
+      return {
+        id: `${file.name}-${file.size}-${Date.now()}`,
+        name: file.name,
+        type: file.type || 'Document',
+        sizeLabel: formatDocumentSize(file.size),
+        content: parsed?.text ?? '',
+        warning: parsed?.warning,
+      };
+    }));
+    setAiDocuments(prev => [...docs, ...prev].slice(0, 8));
+    setAiExtractions([]);
+    setStep(1);
+    event.target.value = '';
+  }
+
+  function populateFromAiDocuments() {
+    if (aiDocuments.length === 0 && !aiNotes.trim()) return;
+    const draft = buildVendorAiDraft(form, aiDocuments, aiNotes);
+    setForm(draft.form);
+    setAiExtractions(draft.extractions);
+    setStep(2);
+  }
+
+  function clearAiDocuments() {
+    setAiDocuments([]);
+    setAiNotes('');
+    setAiExtractions([]);
+    setForm(aiVendorWizardForm);
+    setStep(1);
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="absolute inset-0 z-50 bg-[#020814]/80 backdrop-blur-sm"
+    >
+      <div className="flex h-full items-center justify-center p-5">
+        <motion.div
+          initial={{ opacity: 0, y: 18, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 12, scale: 0.98 }}
+          className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-[rgba(46,127,255,0.28)] bg-[#081528] shadow-2xl"
+        >
+          <div className="flex items-start justify-between border-b border-[rgba(46,127,255,0.16)] bg-gradient-to-r from-[#121D3E] to-[#0A1628] px-6 py-5">
+            <div>
+              <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-[#2E7FFF]/25 bg-[#2E7FFF]/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-[#8DBDFF]">
+                <Sparkles size={12} />
+                VendorIQ setup
+              </div>
+              <h3 className="text-xl font-bold text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Add Vendor</h3>
+              <p className="mt-1 text-[12px] text-[#8AA6C8]">
+                {setupMode === 'ai'
+                  ? 'Start with vendor documents or notes. VendorIQ extracts the profile, baseline, risk, and recommendations before you create the monitored record.'
+                  : 'Manual setup is available when no vendor material is ready. VendorIQ still generates score, risk, and recommendations before creation.'}
+              </p>
+            </div>
+            <div className="flex items-start gap-3">
+              <button
+                type="button"
+                onClick={() => switchSetupMode(setupMode === 'ai' ? 'manual' : 'ai')}
+                className="whitespace-nowrap rounded-xl border border-[#2E7FFF]/24 bg-[#07111F] px-3 py-2 text-[11px] font-bold text-[#BFD8FF] transition-all hover:bg-[#2E7FFF]/12 hover:text-white"
+              >
+                {setupMode === 'ai' ? 'Enter manually instead' : 'Use AI from vendor docs'}
+              </button>
+              <button onClick={onClose} className="rounded-xl border border-white/10 bg-white/5 p-2 text-[#8AA6C8] transition-colors hover:bg-white/10 hover:text-white">
+                <X size={18} />
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-4 gap-2 border-b border-[rgba(46,127,255,0.12)] px-6 py-4">
+            {stepCards.map(card => (
+              <button
+                key={card.id}
+                type="button"
+                onClick={() => setStep(card.id)}
+                className={`rounded-xl border p-3 text-left transition-all ${
+                  step === card.id
+                    ? 'border-[#2E7FFF]/45 bg-[#2E7FFF]/14'
+                    : card.id < step
+                      ? 'border-emerald-500/25 bg-emerald-500/8'
+                      : 'border-[rgba(46,127,255,0.12)] bg-[#06111F]'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className={`grid h-6 w-6 place-items-center rounded-full text-[11px] font-bold ${step === card.id ? 'bg-[#2E7FFF] text-white' : 'bg-[#102544] text-[#8AA6C8]'}`}>{card.id}</span>
+                  <span className="text-[11px] font-bold text-[#EEF3FA]">{card.label}</span>
+                </div>
+                <p className="mt-1 text-[10px] text-[#7A94B4]">{card.detail}</p>
+              </button>
+            ))}
+          </div>
+
+          <div className="flex-1 overflow-y-auto custom-scrollbar px-6 py-5">
+            {setupMode === 'ai' && step === 1 && (
+              <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+                <div className="rounded-2xl border border-cyan-400/22 bg-cyan-500/8 p-5">
+                  <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="inline-flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-cyan-200">
+                        <Wand2 size={13} />
+                        Import vendor context
+                      </div>
+                      <h4 className="mt-2 text-lg font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Upload vendor docs or paste onboarding notes</h4>
+                      <p className="mt-1 text-[12px] leading-5 text-[#8AA6C8]">
+                        VendorIQ reads proposals, contracts, SLA notes, trade licenses, insurance summaries, and onboarding emails before creating the monitored vendor profile.
+                      </p>
+                    </div>
+                    <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-[#2E7FFF]/30 bg-[#2E7FFF]/14 px-4 py-2.5 text-[12px] font-black text-[#BFD8FF] transition-all hover:bg-[#2E7FFF]/22 hover:text-white">
+                      <UploadCloud size={14} />
+                      Add vendor docs
+                      <input
+                        type="file"
+                        multiple
+                        accept=".pdf,.doc,.docx,.txt,.csv,.md,.json,.png,.jpg,.jpeg"
+                        onChange={addAiDocuments}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+
+                  <textarea
+                    value={aiNotes}
+                    onChange={event => {
+                      setAiNotes(event.target.value);
+                      setAiExtractions([]);
+                    }}
+                    placeholder="Paste vendor proposal, SLA commitment, contract scope, trade license details, insurance summary, contact info, rate card, or onboarding email."
+                    className="min-h-[152px] w-full resize-none rounded-2xl border border-[rgba(46,127,255,0.18)] bg-[#050C17] px-4 py-3 text-[13px] leading-6 text-[#EEF3FA] outline-none transition-all placeholder:text-[#4A6480] focus:border-[#2E7FFF]"
+                  />
+
+                  <div className="mt-4 grid gap-2">
+                    {aiDocuments.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-[#2E7FFF]/28 bg-[#07111F] px-4 py-3 text-[12px] text-[#7A94B4]">
+                        No documents added yet. Upload vendor files or paste text, then let AI prepare the setup.
+                      </div>
+                    ) : (
+                      aiDocuments.map(doc => (
+                        <div key={doc.id} className="flex flex-wrap items-center gap-2 rounded-xl border border-[#2E7FFF]/18 bg-[#102544] px-3 py-2 text-[11px] text-[#C8D8EE]">
+                          <FileText size={13} className="text-[#8DBDFF]" />
+                          <span className="min-w-0 flex-1 truncate font-bold">{doc.name}</span>
+                          <span className="text-[#6F89AA]">{doc.sizeLabel}</span>
+                          <span className={`rounded-full border px-2 py-0.5 text-[9px] font-bold ${doc.content.trim() ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200' : 'border-amber-400/25 bg-amber-400/10 text-amber-200'}`}>
+                            {doc.content.trim() ? 'Readable' : 'Needs pasted text'}
+                          </span>
+                          <button type="button" onClick={() => setAiDocuments(prev => prev.filter(item => item.id !== doc.id))} className="text-[#7A94B4] hover:text-red-300" aria-label={`Remove ${doc.name}`}>
+                            <Trash2 size={12} />
+                          </button>
+                          {doc.warning && <div className="basis-full text-[10px] text-amber-200">{doc.warning}</div>}
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {['Vendor proposal', 'Contract / SLA', 'Trade license', 'Insurance summary', 'Onboarding email'].map(item => (
+                      <span key={item} className="rounded-lg border border-[#2E7FFF]/18 bg-[#07111F] px-2.5 py-1 text-[10px] font-bold text-[#8AA6C8]">{item}</span>
+                    ))}
+                    {hasAiInput && (
+                      <button type="button" onClick={clearAiDocuments} className="rounded-lg border border-red-300/20 bg-red-400/8 px-2.5 py-1 text-[10px] font-bold text-red-200 transition-all hover:bg-red-400/14">
+                        Clear intake
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="rounded-2xl border border-[rgba(46,127,255,0.16)] bg-[#07111F] p-5">
+                    <div className="mb-3 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-[#8DBDFF]">
+                      <Brain size={13} />
+                      What AI will extract
+                    </div>
+                    <div className="grid gap-2">
+                      {[
+                        'Vendor name, category, service scope, and sites covered',
+                        'SLA, first-time fix, evidence, cost, and volume signals',
+                        'Contact, contract expiry, insurance, license, and compliance flags',
+                        'Dependency risk, predicted risk, VendorIQ score, and recommendations',
+                      ].map(item => (
+                        <div key={item} className="flex gap-2 rounded-xl border border-[rgba(46,127,255,0.12)] bg-[#0D1E3A] p-3 text-[12px] leading-5 text-[#C8D8EE]">
+                          <CheckCircle size={13} className="mt-0.5 shrink-0 text-emerald-400" />
+                          {item}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-purple-400/20 bg-purple-500/8 p-5">
+                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-purple-200">Fallback path</div>
+                    <p className="mt-2 text-[12px] leading-5 text-[#C8D8EE]">If the vendor material is not ready, use the manual wizard and still create the same VendorIQ monitored profile.</p>
+                    <button type="button" onClick={() => switchSetupMode('manual')} className="mt-4 rounded-xl border border-purple-300/25 bg-purple-400/10 px-4 py-2 text-[12px] font-black text-purple-100 transition-all hover:bg-purple-400/16">
+                      Enter manually instead
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {setupMode === 'ai' && step === 2 && (
+              <div className="grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
+                <div className="rounded-2xl border border-cyan-400/22 bg-cyan-500/8 p-5">
+                  <div className="mb-4 flex items-start justify-between gap-3">
+                    <div>
+                      <div className="inline-flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-cyan-200">
+                        <Sparkles size={13} />
+                        AI understanding
+                      </div>
+                      <h4 className="mt-2 text-lg font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
+                        {aiExtractions.length ? `AI detected ${aiExtractions.length} vendor signals` : 'Ready to extract vendor signals'}
+                      </h4>
+                      <p className="mt-1 text-[12px] leading-5 text-[#8AA6C8]">
+                        {aiExtractions.length
+                          ? `${needsConfirmation.length || 0} item${needsConfirmation.length === 1 ? '' : 's'} require confirmation before creation.`
+                          : 'Run the extraction after adding documents or pasted notes.'}
+                      </p>
+                    </div>
+                    {aiExtractions.length > 0 && confidenceBadge(aiConfidence)}
+                  </div>
+                  <div className="space-y-2">
+                    {aiPhases.map((phase, index) => (
+                      <div key={phase} className="flex items-center gap-3 rounded-xl border border-[rgba(46,127,255,0.14)] bg-[#07111F] p-3">
+                        <span className={`grid h-7 w-7 place-items-center rounded-full text-[10px] font-black ${aiExtractions.length ? 'bg-emerald-400/15 text-emerald-200' : index === 0 ? 'bg-[#2E7FFF]/18 text-[#8DBDFF]' : 'bg-[#102544] text-[#6F89AA]'}`}>
+                          {aiExtractions.length ? <CheckCircle size={13} /> : index + 1}
+                        </span>
+                        <span className="text-[12px] font-bold text-[#DDE6F8]">{phase}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {!aiExtractions.length && (
+                    <button type="button" onClick={populateFromAiDocuments} disabled={!hasAiInput} className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#2E7FFF] px-4 py-3 text-[12px] font-black text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF] disabled:cursor-not-allowed disabled:bg-[#1A3356] disabled:text-[#7891B0] disabled:shadow-none">
+                      <Sparkles size={14} />
+                      Run AI understanding
+                    </button>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-[rgba(46,127,255,0.16)] bg-[#07111F] p-5">
+                  <div className="mb-3 text-[10px] font-black uppercase tracking-[0.18em] text-[#8DBDFF]">Extracted signal cards</div>
+                  {aiExtractions.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-[#2E7FFF]/25 bg-[#0D1E3A] p-5 text-center text-[12px] leading-5 text-[#7A94B4]">
+                      Add vendor docs or paste notes, then run AI understanding.
+                    </div>
+                  ) : (
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {aiExtractions.map(item => (
+                        <div key={`${item.label}-${item.value}`} className="rounded-xl border border-cyan-400/18 bg-cyan-500/8 p-3">
+                          <div className="text-[9px] font-bold uppercase tracking-wide text-cyan-200">{item.label}</div>
+                          <div className="mt-1 truncate text-[13px] font-black text-[#EEF3FA]">{item.value}</div>
+                          <div className="mt-1 text-[9px] uppercase tracking-wide text-[#6F89AA]">Source: {item.source}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {needsConfirmation.length > 0 && (
+                    <div className="mt-4 rounded-xl border border-amber-400/20 bg-amber-400/8 p-3">
+                      <div className="text-[10px] font-black uppercase tracking-[0.16em] text-amber-200">Needs confirmation</div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {needsConfirmation.map(item => (
+                          <span key={item} className="rounded-lg border border-amber-400/24 bg-amber-400/10 px-2 py-1 text-[10px] font-bold text-amber-100">{item}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {setupMode === 'ai' && step === 3 && (
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="rounded-2xl border border-[rgba(46,127,255,0.16)] bg-[#07111F] p-5">
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                    <h4 className="text-sm font-black text-[#EEF3FA]">Vendor profile</h4>
+                    {confidenceBadge(Math.max(62, aiConfidence || 62))}
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <VendorWizardField label="Vendor name"><VendorWizardInput value={form.name} onChange={input('name')} /></VendorWizardField>
+                    <VendorWizardField label="Category"><VendorWizardSelect value={form.category} onChange={input('category')}>{vendorCategories.map(category => <option key={category}>{category}</option>)}</VendorWizardSelect></VendorWizardField>
+                    <VendorWizardField label="Sites covered" helper="Comma separated"><VendorWizardInput value={form.sites} onChange={input('sites')} /></VendorWizardField>
+                    <VendorWizardField label="Contract expiry"><VendorWizardInput value={form.contractExpiry} onChange={input('contractExpiry')} /></VendorWizardField>
+                    <VendorWizardField label="Primary contact"><VendorWizardInput value={form.pocName} onChange={input('pocName')} /></VendorWizardField>
+                    <VendorWizardField label="Email"><VendorWizardInput type="email" value={form.pocEmail} onChange={input('pocEmail')} /></VendorWizardField>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {confirmationBadge('Vendor name', extracted('Vendor name'))}
+                    {confirmationBadge('Category', extracted('Category'))}
+                    {confirmationBadge('Contact', extracted('Email') || extracted('Phone') || extracted('Primary contact'))}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-[rgba(46,127,255,0.16)] bg-[#07111F] p-5">
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                    <h4 className="text-sm font-black text-[#EEF3FA]">Performance baseline</h4>
+                    {confirmationBadge('SLA', extracted('SLA'))}
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <VendorWizardField label="SLA compliance %"><VendorWizardInput type="number" min="0" max="100" value={form.slaCompliance} onChange={input('slaCompliance')} /></VendorWizardField>
+                    <VendorWizardField label="First-time fix %"><VendorWizardInput type="number" min="0" max="100" value={form.firstTimeFixRate} onChange={input('firstTimeFixRate')} /></VendorWizardField>
+                    <VendorWizardField label="Evidence compliance %"><VendorWizardInput type="number" min="0" max="100" value={form.evidenceCompliance} onChange={input('evidenceCompliance')} /></VendorWizardField>
+                    <VendorWizardField label="Avg cost / job"><VendorWizardInput type="number" min="0" value={form.avgCostPerJob} onChange={input('avgCostPerJob')} /></VendorWizardField>
+                    <VendorWizardField label="Jobs last 30 days"><VendorWizardInput type="number" min="0" value={form.jobsLast30d} onChange={input('jobsLast30d')} /></VendorWizardField>
+                    <VendorWizardField label="Active contracts"><VendorWizardInput type="number" min="0" value={form.activeContracts} onChange={input('activeContracts')} /></VendorWizardField>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-amber-400/18 bg-amber-400/8 p-5">
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                    <h4 className="text-sm font-black text-[#EEF3FA]">Compliance & risk</h4>
+                    {confirmationBadge('Dependency risk', extracted('Dependency risk'))}
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <VendorWizardField label="Trend"><VendorWizardSelect value={form.trend} onChange={input('trend')}><option value="up">Improving</option><option value="flat">Stable</option><option value="down">Declining</option></VendorWizardSelect></VendorWizardField>
+                    <VendorWizardField label="Dependency risk"><VendorWizardSelect value={form.dependencyRisk} onChange={input('dependencyRisk')}>{['Low', 'Medium', 'High', 'Critical'].map(level => <option key={level}>{level}</option>)}</VendorWizardSelect></VendorWizardField>
+                    <VendorWizardField label="30-day predicted risk %"><VendorWizardInput type="number" min="0" max="100" value={form.predictedRisk30d} onChange={input('predictedRisk30d')} /></VendorWizardField>
+                    <VendorWizardField label="Contract flags" helper="Separate with semicolons"><VendorWizardInput value={form.contractFlags} onChange={input('contractFlags')} /></VendorWizardField>
+                    <div className="sm:col-span-2"><VendorWizardField label="Dependency note"><textarea value={form.dependencyNote} onChange={input('dependencyNote')} className="min-h-[92px] w-full rounded-xl border border-[rgba(46,127,255,0.22)] bg-[#07111F] px-3 py-2.5 text-[12px] text-[#EEF3FA] outline-none transition-all placeholder:text-[#4A6480] focus:border-[#2E7FFF]" /></VendorWizardField></div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-purple-500/20 bg-purple-500/8 p-5">
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-black text-[#EEF3FA]">VendorIQ monitoring setup</h4>
+                      <p className="mt-1 text-[11px] text-[#8AA6C8]">This is what the live Vendor Intelligence dashboard will monitor after creation.</p>
+                    </div>
+                    <ScoreRing score={score} size={70} />
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <VendorWizardSummaryPill label="Classification" value={risk} tone={riskTone} />
+                    <VendorWizardSummaryPill label="Dependency" value={form.dependencyRisk} tone={form.dependencyRisk === 'Low' ? 'green' : form.dependencyRisk === 'Medium' ? 'amber' : 'red'} />
+                    <VendorWizardSummaryPill label="Evidence" value={`${numeric(form.evidenceCompliance, 85)}%`} tone={numeric(form.evidenceCompliance, 85) >= 85 ? 'green' : 'amber'} />
+                    <VendorWizardSummaryPill label="Coverage" value={`${sites.length || 1} site scope`} tone="blue" />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {setupMode === 'ai' && step === 4 && (
+              <div className="grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
+                <div className="rounded-2xl border border-[#2E7FFF]/20 bg-[#07111F] p-5">
+                  <div className="mb-4 flex items-center justify-between gap-4">
+                    <div>
+                      <div className="text-[10px] font-black uppercase tracking-[0.18em] text-[#8DBDFF]">Create monitored vendor</div>
+                      <h4 className="mt-2 text-lg font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{form.name || 'New Vendor'}</h4>
+                      <p className="mt-1 text-[12px] text-[#8AA6C8]">{form.category} / {sites.join(', ') || 'site scope pending'}</p>
+                    </div>
+                    <ScoreRing score={score} size={82} />
+                  </div>
+                  <div className="grid gap-2">
+                    <VendorWizardSummaryPill label="Risk tier" value={risk} tone={riskTone} />
+                    <VendorWizardSummaryPill label="AI confidence" value={aiExtractions.length ? `${aiConfidence}%` : 'Manual review'} tone={aiConfidence >= 80 ? 'green' : 'amber'} />
+                    <VendorWizardSummaryPill label="Needs confirmation" value={`${needsConfirmation.length}`} tone={needsConfirmation.length ? 'amber' : 'green'} />
+                  </div>
+                  <div className="mt-4 rounded-xl border border-[rgba(46,127,255,0.14)] bg-[#0D1E3A] p-3">
+                    <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[#7A94B4]">Source trace</div>
+                    <p className="mt-2 text-[12px] leading-5 text-[#C8D8EE]">
+                      {aiDocuments.length} document{aiDocuments.length === 1 ? '' : 's'} and {aiNotes.trim() ? 'pasted notes' : 'no pasted notes'} prepared this VendorIQ profile. No external workflow is triggered until the profile is created.
+                    </p>
+                  </div>
+                </div>
+                <div className="grid gap-4">
+                  <div className="rounded-2xl border border-purple-500/20 bg-purple-500/8 p-5">
+                    <div className="mb-3 flex items-center gap-2">
+                      <Brain size={15} className="text-purple-300" />
+                      <h4 className="text-sm font-bold text-[#EEF3FA]">AI insight preview</h4>
+                    </div>
+                    <div className="space-y-2">
+                      {buildVendorInsights(form, score).map((insight, index) => (
+                        <div key={index} className="rounded-xl bg-[#07111F] p-3 text-[12px] leading-relaxed text-[#C8D8EE]">{insight}</div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-[rgba(46,127,255,0.16)] bg-[#07111F] p-5">
+                    <div className="mb-3 flex items-center gap-2">
+                      <Target size={15} className="text-[#2E7FFF]" />
+                      <h4 className="text-sm font-bold text-[#EEF3FA]">Recommendations generated</h4>
+                    </div>
+                    <div className="space-y-3">
+                      {buildVendorRecommendations(form, score).map((rec, index) => (
+                        <div key={index} className="rounded-xl border border-[rgba(46,127,255,0.14)] bg-[#0D1E3A] p-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-[12px] font-bold text-[#EEF3FA]">{rec.title}</span>
+                            <span className={`rounded-full border px-2 py-0.5 text-[9px] font-bold ${actionColor(rec.action)}`}>{rec.action}</span>
+                          </div>
+                          <p className="mt-2 text-[11px] leading-relaxed text-[#8AA6C8]">{rec.detail}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {setupMode === 'manual' && step === 1 && (
+              <div className="grid gap-5 lg:grid-cols-[1.35fr_0.9fr]">
+                <div className="rounded-2xl border border-[rgba(46,127,255,0.16)] bg-[#07111F] p-5">
+                  <div className="mb-4 flex items-center gap-2">
+                    <Building2 size={15} className="text-[#2E7FFF]" />
+                    <h4 className="text-sm font-bold text-[#EEF3FA]">Vendor profile and service scope</h4>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <VendorWizardField label="Vendor name">
+                      <VendorWizardInput value={form.name} onChange={input('name')} />
+                    </VendorWizardField>
+                    <VendorWizardField label="Category">
+                      <VendorWizardSelect value={form.category} onChange={input('category')}>
+                        {vendorCategories.map(category => <option key={category}>{category}</option>)}
+                      </VendorWizardSelect>
+                    </VendorWizardField>
+                    <VendorWizardField label="Sites covered" helper="Comma separated">
+                      <VendorWizardInput value={form.sites} onChange={input('sites')} />
+                    </VendorWizardField>
+                    <VendorWizardField label="Contract expiry">
+                      <VendorWizardInput value={form.contractExpiry} onChange={input('contractExpiry')} />
+                    </VendorWizardField>
+                    <VendorWizardField label="Primary contact">
+                      <VendorWizardInput value={form.pocName} onChange={input('pocName')} />
+                    </VendorWizardField>
+                    <VendorWizardField label="Contact title">
+                      <VendorWizardInput value={form.pocTitle} onChange={input('pocTitle')} />
+                    </VendorWizardField>
+                    <VendorWizardField label="Phone">
+                      <VendorWizardInput value={form.pocPhone} onChange={input('pocPhone')} />
+                    </VendorWizardField>
+                    <VendorWizardField label="Email">
+                      <VendorWizardInput type="email" value={form.pocEmail} onChange={input('pocEmail')} />
+                    </VendorWizardField>
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-purple-500/20 bg-purple-500/8 p-5">
+                  <div className="mb-3 flex items-center gap-2">
+                    <Brain size={15} className="text-purple-300" />
+                    <h4 className="text-sm font-bold text-[#EEF3FA]">How this maps to VendorIQ</h4>
+                  </div>
+                  <div className="space-y-2 text-[12px] text-[#C8D8EE]">
+                    <p>Vendor profile powers the dashboard header, contract scope, dependency risk, and routing decisions.</p>
+                    <p>Sites become the coverage map for reassignment, risk concentration, and contract lapse impact.</p>
+                    <p>Contact details are used by review, renewal, and performance notice workflows.</p>
+                  </div>
+                  <div className="mt-4 grid gap-2">
+                    <VendorWizardSummaryPill label="Coverage" value={`${sites.length || 1} site scope`} tone="blue" />
+                    <VendorWizardSummaryPill label="Contract" value={form.contractExpiry || 'Not set'} tone="amber" />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {setupMode === 'manual' && step === 2 && (
+              <div className="grid gap-5 lg:grid-cols-[1fr_1fr]">
+                <div className="rounded-2xl border border-[rgba(46,127,255,0.16)] bg-[#07111F] p-5">
+                  <div className="mb-4 flex items-center gap-2">
+                    <Activity size={15} className="text-[#2E7FFF]" />
+                    <h4 className="text-sm font-bold text-[#EEF3FA]">Performance baseline</h4>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <VendorWizardField label="SLA compliance %"><VendorWizardInput type="number" min="0" max="100" value={form.slaCompliance} onChange={input('slaCompliance')} /></VendorWizardField>
+                    <VendorWizardField label="First-time fix %"><VendorWizardInput type="number" min="0" max="100" value={form.firstTimeFixRate} onChange={input('firstTimeFixRate')} /></VendorWizardField>
+                    <VendorWizardField label="Avg resolution minutes"><VendorWizardInput type="number" min="0" value={form.avgResolutionMin} onChange={input('avgResolutionMin')} /></VendorWizardField>
+                    <VendorWizardField label="Evidence compliance %"><VendorWizardInput type="number" min="0" max="100" value={form.evidenceCompliance} onChange={input('evidenceCompliance')} /></VendorWizardField>
+                    <VendorWizardField label="Repeat failure %"><VendorWizardInput type="number" min="0" max="100" value={form.repeatFailureRate} onChange={input('repeatFailureRate')} /></VendorWizardField>
+                    <VendorWizardField label="Jobs last 30 days"><VendorWizardInput type="number" min="0" value={form.jobsLast30d} onChange={input('jobsLast30d')} /></VendorWizardField>
+                    <VendorWizardField label="Avg cost / job"><VendorWizardInput type="number" min="0" value={form.avgCostPerJob} onChange={input('avgCostPerJob')} /></VendorWizardField>
+                    <VendorWizardField label="Active contracts"><VendorWizardInput type="number" min="0" value={form.activeContracts} onChange={input('activeContracts')} /></VendorWizardField>
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-[rgba(46,127,255,0.16)] bg-[#0D1E3A] p-5">
+                  <div className="mb-4 flex items-center justify-between">
+                    <div>
+                      <h4 className="text-sm font-bold text-[#EEF3FA]">Live score preview</h4>
+                      <p className="text-[11px] text-[#7A94B4]">Uses the same scoring logic as the dashboard.</p>
+                    </div>
+                    <ScoreRing score={score} size={72} />
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {dashboardSections.slice(0, 3).map(item => (
+                      <VendorWizardSummaryPill key={item.label} label={item.label} value={item.value} tone={item.tone} />
+                    ))}
+                  </div>
+                  <div className="mt-4 rounded-xl border border-[rgba(46,127,255,0.14)] bg-[#07111F] p-3">
+                    <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7A94B4]">Interpretation</div>
+                    <p className="mt-2 text-[12px] leading-relaxed text-[#C8D8EE]">
+                      {risk === 'Preferred'
+                        ? 'This vendor can enter preferred rotation once compliance documents are confirmed.'
+                        : risk === 'Watchlist'
+                          ? 'This vendor should start with controlled scope and a short KPI review cycle.'
+                          : 'This vendor should not receive critical work until performance controls are agreed.'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {setupMode === 'manual' && step === 3 && (
+              <div className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
+                <div className="rounded-2xl border border-[rgba(46,127,255,0.16)] bg-[#07111F] p-5">
+                  <div className="mb-4 flex items-center gap-2">
+                    <ShieldCheck size={15} className="text-[#2E7FFF]" />
+                    <h4 className="text-sm font-bold text-[#EEF3FA]">Compliance, risk, and dependency</h4>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <VendorWizardField label="Trend">
+                      <VendorWizardSelect value={form.trend} onChange={input('trend')}>
+                        <option value="up">Improving</option>
+                        <option value="flat">Stable</option>
+                        <option value="down">Declining</option>
+                      </VendorWizardSelect>
+                    </VendorWizardField>
+                    <VendorWizardField label="Dependency risk">
+                      <VendorWizardSelect value={form.dependencyRisk} onChange={input('dependencyRisk')}>
+                        {['Low', 'Medium', 'High', 'Critical'].map(level => <option key={level}>{level}</option>)}
+                      </VendorWizardSelect>
+                    </VendorWizardField>
+                    <VendorWizardField label="30-day predicted risk %">
+                      <VendorWizardInput type="number" min="0" max="100" value={form.predictedRisk30d} onChange={input('predictedRisk30d')} />
+                    </VendorWizardField>
+                    <VendorWizardField label="Contract flags" helper="Separate multiple flags with semicolons">
+                      <VendorWizardInput value={form.contractFlags} onChange={input('contractFlags')} />
+                    </VendorWizardField>
+                    <div className="sm:col-span-2">
+                      <VendorWizardField label="Dependency note">
+                        <textarea value={form.dependencyNote} onChange={input('dependencyNote')} className="min-h-[92px] w-full rounded-xl border border-[rgba(46,127,255,0.22)] bg-[#07111F] px-3 py-2.5 text-[12px] text-[#EEF3FA] outline-none transition-all placeholder:text-[#4A6480] focus:border-[#2E7FFF]" />
+                      </VendorWizardField>
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-amber-500/20 bg-amber-500/8 p-5">
+                  <div className="mb-3 flex items-center gap-2">
+                    <AlertTriangle size={15} className="text-amber-300" />
+                    <h4 className="text-sm font-bold text-[#EEF3FA]">Dashboard impact</h4>
+                  </div>
+                  <div className="grid gap-2">
+                    {dashboardSections.slice(2).map(item => (
+                      <VendorWizardSummaryPill key={item.label} label={item.label} value={item.value} tone={item.tone} />
+                    ))}
+                  </div>
+                  <div className="mt-4 space-y-2">
+                    {flags.length === 0 ? (
+                      <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-[12px] text-emerald-300">No contract flags will be shown at onboarding.</div>
+                    ) : (
+                      flags.map((flag, index) => (
+                        <div key={index} className="rounded-xl border border-amber-500/20 bg-[#07111F] p-3 text-[12px] text-[#C8D8EE]">{flag.description}</div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {setupMode === 'manual' && step === 4 && (
+              <div className="grid gap-5 lg:grid-cols-[1fr_1fr]">
+                <div className="rounded-2xl border border-purple-500/20 bg-purple-500/8 p-5">
+                  <div className="mb-4 flex items-center gap-2">
+                    <Brain size={15} className="text-purple-300" />
+                    <h4 className="text-sm font-bold text-[#EEF3FA]">AI insight preview</h4>
+                  </div>
+                  <div className="space-y-2">
+                    {buildVendorInsights(form, score).map((insight, index) => (
+                      <div key={index} className="rounded-xl bg-[#07111F] p-3 text-[12px] leading-relaxed text-[#C8D8EE]">
+                        {insight}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-[rgba(46,127,255,0.16)] bg-[#07111F] p-5">
+                  <div className="mb-4 flex items-center gap-2">
+                    <Target size={15} className="text-[#2E7FFF]" />
+                    <h4 className="text-sm font-bold text-[#EEF3FA]">Recommendations generated</h4>
+                  </div>
+                  <div className="space-y-3">
+                    {buildVendorRecommendations(form, score).map((rec, index) => (
+                      <div key={index} className="rounded-xl border border-[rgba(46,127,255,0.14)] bg-[#0D1E3A] p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-[12px] font-bold text-[#EEF3FA]">{rec.title}</span>
+                          <span className={`rounded-full border px-2 py-0.5 text-[9px] font-bold ${actionColor(rec.action)}`}>{rec.action}</span>
+                        </div>
+                        <p className="mt-2 text-[11px] leading-relaxed text-[#8AA6C8]">{rec.detail}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-4 grid grid-cols-2 gap-2">
+                    <VendorWizardSummaryPill label="Score" value={`${score}/100`} tone={riskTone} />
+                    <VendorWizardSummaryPill label="Classification" value={risk} tone={riskTone} />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between border-t border-[rgba(46,127,255,0.14)] px-6 py-4">
+            <div className="text-[11px] text-[#7A94B4]">
+              {setupMode === 'ai'
+                ? step === 1
+                  ? `${aiDocuments.length} document${aiDocuments.length === 1 ? '' : 's'} added. AI starts from uploaded vendor material or pasted notes.`
+                  : step === 2
+                    ? aiExtractions.length
+                      ? `${aiExtractions.length} fields detected with ${aiConfidence}% confidence. ${needsConfirmation.length} item${needsConfirmation.length === 1 ? '' : 's'} need confirmation.`
+                      : 'Run AI understanding to extract vendor signals before review.'
+                    : step === 3
+                      ? 'Review and correct extracted fields before creating the monitored VendorIQ profile.'
+                      : 'Ready to create the vendor profile from document intake.'
+                : step < 4 ? 'VendorIQ will generate score, risk tier, AI insights, recommendations, and dependency context.' : 'Ready to add this vendor to Vendor Intelligence.'}
+            </div>
+            <div className="flex gap-2">
+              <button type="button" onClick={step === 1 ? onClose : () => setStep(prev => (Math.max(1, prev - 1) as VendorWizardStep))} className="rounded-xl border border-[rgba(46,127,255,0.18)] bg-[#07111F] px-4 py-2 text-[12px] font-semibold text-[#8AA6C8] transition-all hover:bg-white/5 hover:text-white">
+                {step === 1 ? 'Cancel' : 'Back'}
+              </button>
+              {setupMode === 'ai' ? (
+                step === 4 ? (
+                  <button type="button" onClick={submit} className="rounded-xl bg-[#ED1D2E] px-5 py-2 text-[12px] font-bold text-white shadow-lg shadow-[#ED1D2E]/20 transition-all hover:bg-[#ff3040]">
+                    Create Vendor Profile
+                  </button>
+                ) : step === 1 ? (
+                  <button type="button" onClick={populateFromAiDocuments} disabled={!hasAiInput} className="rounded-xl bg-[#2E7FFF] px-5 py-2 text-[12px] font-bold text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF] disabled:cursor-not-allowed disabled:bg-[#1A3356] disabled:text-[#7891B0] disabled:shadow-none">
+                    Run AI understanding
+                  </button>
+                ) : step === 2 ? (
+                  <button
+                    type="button"
+                    onClick={() => (aiExtractions.length ? setStep(3) : populateFromAiDocuments())}
+                    disabled={!hasAiInput}
+                    className="rounded-xl bg-[#2E7FFF] px-5 py-2 text-[12px] font-bold text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF] disabled:cursor-not-allowed disabled:bg-[#1A3356] disabled:text-[#7891B0] disabled:shadow-none"
+                  >
+                    {aiExtractions.length ? 'Review & Correct' : 'Run AI understanding'}
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => setStep(4)} className="rounded-xl bg-[#2E7FFF] px-5 py-2 text-[12px] font-bold text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF]">
+                    Continue to Profile
+                  </button>
+                )
+              ) : step < 4 ? (
+                <button type="button" onClick={() => setStep(prev => (Math.min(4, prev + 1) as VendorWizardStep))} className="rounded-xl bg-[#2E7FFF] px-5 py-2 text-[12px] font-bold text-white shadow-lg shadow-[#2E7FFF]/20 transition-all hover:bg-[#4B91FF]">
+                  Continue
+                </button>
+              ) : (
+                <button type="button" onClick={submit} className="rounded-xl bg-[#ED1D2E] px-5 py-2 text-[12px] font-bold text-white shadow-lg shadow-[#ED1D2E]/20 transition-all hover:bg-[#ff3040]">
+                  Add Vendor
+                </button>
+              )}
+            </div>
+          </div>
+        </motion.div>
+      </div>
+    </motion.div>
+  );
+}
+
+interface Props { onToast: ToastFn }
+
+export function VendorIntelligence({ onToast }: Props) {
+  const [filterTab, setFilterTab] = useState<FilterTab>('copilot');
+  const [selectedVendor, setSelectedVendor] = useState<VendorIntelData | null>(null);
+  const [showAddVendorWizard, setShowAddVendorWizard] = useState(false);
+  const [showPageCopilotModal, setShowPageCopilotModal] = useState(false);
+  const [pageCopilotAction, setPageCopilotAction] = useState<VendorCopilotAction>('compare');
+  const [pageCopilotModalAction, setPageCopilotModalAction] = useState<VendorCopilotAction>('compare');
+  const [pageCopilotVendorId, setPageCopilotVendorId] = useState('');
+  const [pageCopilotOverride, setPageCopilotOverride] = useState<VendorCopilotResult | null>(null);
+  const [pageCopilotLog, setPageCopilotLog] = useState<string[]>([
+    'Portfolio procurement copilot ready on the Vendor Intelligence page.',
+  ]);
+  const { vendors: allVendors, addVendor } = useVendors();
+
+  const vendorsWithScores = allVendors.map(v => ({
+    vendor: v,
+    score: computeVendorScore(v),
+    riskLevel: classifyVendorRisk(computeVendorScore(v)),
+  }));
+
+  const filteredVendors = (() => {
+    const all = [...vendorsWithScores];
+    switch (filterTab) {
+      case 'top': return all.sort((a, b) => b.score - a.score).filter(v => v.riskLevel === 'Preferred');
+      case 'atrisk': return all.filter(v => v.riskLevel === 'At Risk' || (v.riskLevel === 'Watchlist' && v.vendor.trend === 'down'));
+      case 'cost': return all.sort((a, b) => a.vendor.avgCostPerJob - b.vendor.avgCostPerJob);
+      default: return all.sort((a, b) => b.score - a.score);
+    }
+  })();
+
+  const tabs: { id: FilterTab; label: string }[] = [
+    { id: 'copilot', label: 'Procurement Copilot' },
+    { id: 'all', label: 'All Vendors' },
+    { id: 'top', label: 'Top Vendors' },
+    { id: 'atrisk', label: 'At Risk' },
+    { id: 'cost', label: 'Cost Efficiency Ranking' },
+  ];
+
+  const summary = {
+    preferred: vendorsWithScores.filter(v => v.riskLevel === 'Preferred').length,
+    watchlist: vendorsWithScores.filter(v => v.riskLevel === 'Watchlist').length,
+    atRisk: vendorsWithScores.filter(v => v.riskLevel === 'At Risk').length,
+  };
+  const procurementFocus = [...vendorsWithScores].sort((a, b) => {
+    const aPriority = a.riskLevel === 'At Risk' ? 0 : a.riskLevel === 'Watchlist' ? 1 : 2;
+    const bPriority = b.riskLevel === 'At Risk' ? 0 : b.riskLevel === 'Watchlist' ? 1 : 2;
+    if (aPriority !== bPriority) return aPriority - bPriority;
+    return a.score - b.score;
+  })[0]?.vendor ?? allVendors[0];
+  const pageCopilotVendor = allVendors.find(vendor => vendor.id === pageCopilotVendorId) ?? procurementFocus;
+  const pageCopilotResult = pageCopilotOverride ?? buildVendorCopilotResult(pageCopilotVendor, allVendors, pageCopilotAction);
+
+  function runPageCopilotAction(action: VendorCopilotAction) {
+    setPageCopilotAction(action);
+    if (action !== 'rfq') setPageCopilotOverride(null);
+    setPageCopilotLog(prev => [
+      `${formatVendorAction(action)} from page copilot for ${pageCopilotVendor.name}`,
+      ...prev.filter(item => item !== `${formatVendorAction(action)} from page copilot for ${pageCopilotVendor.name}`),
+    ]);
+    onToast(`${formatVendorAction(action)} from Procurement Copilot`, action === 'background' ? 'warning' : 'success');
+  }
+
+  function openPageRfqWizard() {
+    setPageCopilotModalAction('rfq');
+    setShowPageCopilotModal(true);
+  }
+
+  function openPageQuoteIntake() {
+    setPageCopilotAction('compare');
+    setPageCopilotModalAction('compare');
+    setPageCopilotOverride(null);
+    setShowPageCopilotModal(true);
+  }
+
+  function openPageBackgroundCheck() {
+    setPageCopilotAction('background');
+    setPageCopilotModalAction('background');
+    setPageCopilotOverride(null);
+    setShowPageCopilotModal(true);
+  }
+
+  function openPageActionPack() {
+    setPageCopilotAction('negotiation');
+    setPageCopilotModalAction('negotiation');
+    setPageCopilotOverride(null);
+    setPageCopilotVendorId(pageCopilotVendor.id);
+    setShowPageCopilotModal(true);
+  }
+
+  function openPageCopilotModal() {
+    setPageCopilotModalAction(pageCopilotAction);
+    setShowPageCopilotModal(true);
+  }
+
+  function runPageCopilotModalAction(action: VendorCopilotAction) {
+    setPageCopilotModalAction(action);
+    runPageCopilotAction(action);
+  }
+
+  function updatePageRfqWorkbench(rfqResult: VendorCopilotResult) {
+    setPageCopilotAction('rfq');
+    setPageCopilotOverride(rfqResult);
+    setPageCopilotLog(prev => [
+      `${rfqResult.title} saved to Procurement Copilot`,
+      ...prev.filter(item => item !== `${rfqResult.title} saved to Procurement Copilot`),
+    ]);
+    onToast('RFQ package saved to Procurement Copilot', 'success');
+  }
+
+  function updatePageBackgroundWorkbench(backgroundResult: VendorCopilotResult) {
+    setPageCopilotAction('background');
+    setPageCopilotOverride(backgroundResult);
+    setPageCopilotLog(prev => [
+      `${backgroundResult.title} saved to Procurement Copilot`,
+      ...prev.filter(item => item !== `${backgroundResult.title} saved to Procurement Copilot`),
+    ]);
+    onToast('Background report saved to Procurement Copilot', 'success');
+  }
+
+  function updatePageActionPackWorkbench(actionPackResult: VendorCopilotResult, vendor: VendorIntelData) {
+    setPageCopilotAction('negotiation');
+    setPageCopilotVendorId(vendor.id);
+    setPageCopilotOverride(actionPackResult);
+    setPageCopilotLog(prev => [
+      `${actionPackResult.title} saved to Procurement Copilot`,
+      ...prev.filter(item => item !== `${actionPackResult.title} saved to Procurement Copilot`),
+    ]);
+    onToast('Action pack saved to Procurement Copilot', 'success');
+  }
+
+  function createVendor(vendor: VendorIntelData, source: VendorCreateSource = 'manual') {
+    addVendor(vendor);
+    setShowAddVendorWizard(false);
+    setFilterTab('all');
+    setSelectedVendor(vendor);
+    onToast(source === 'ai' ? 'Vendor profile created from document intake' : `${vendor.name} added to Vendor Intelligence`, 'success');
+  }
+
+  if (selectedVendor) {
+    return (
+      <div className="absolute inset-0 flex flex-col">
+        <VendorDetailPage vendor={selectedVendor} onBack={() => setSelectedVendor(null)} onToast={onToast} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full flex flex-col overflow-hidden" data-demo-anchor="vendoriq-command">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-[rgba(46,127,255,0.15)] flex-shrink-0">
+        <div>
+          <h2 className="text-[#EEF3FA] font-bold text-base" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Vendor Intelligence & Contract Optimization</h2>
+          <p className="text-[11px] text-[#7A94B4]">AI-powered vendor scoring, risk detection, and contract compliance monitoring</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowAddVendorWizard(true)}
+            className="inline-flex items-center gap-2 rounded-xl bg-[#ED1D2E] px-4 py-2 text-[12px] font-bold text-white shadow-lg shadow-[#ED1D2E]/20 transition-all hover:bg-[#ff3040]"
+          >
+            <Plus size={14} />
+            Add Vendor
+          </button>
+          <div className="hidden items-center gap-1.5 sm:flex">
+            <ShieldCheck size={14} className="text-[#2E7FFF]" />
+            <span className="text-[10px] text-[#7A94B4]">4C360 Vendor AI</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-4 px-5 py-3 border-b border-[rgba(46,127,255,0.08)] flex-shrink-0">
+        {[
+          { label: 'Preferred', count: summary.preferred, color: '#38D98A' },
+          { label: 'Watchlist', count: summary.watchlist, color: '#FF9B38' },
+          { label: 'At Risk', count: summary.atRisk, color: '#FF4B4B' },
+        ].map(s => (
+          <div key={s.label} className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full" style={{ background: s.color }} />
+            <span className="text-[11px] font-bold" style={{ color: s.color }}>{s.count}</span>
+            <span className="text-[11px] text-[#7A94B4]">{s.label}</span>
+          </div>
+        ))}
+        <div className="h-4 w-px bg-[rgba(46,127,255,0.2)] mx-1" />
+        <span className="text-[11px] text-[#7A94B4]">{allVendors.length} vendors · {allVendors.reduce((s, v) => s + v.activeContracts, 0)} active contracts</span>
+      </div>
+
+      <div className="flex items-center gap-1 px-5 py-2 border-b border-[rgba(46,127,255,0.08)] flex-shrink-0 overflow-x-auto no-scrollbar">
+        {tabs.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setFilterTab(t.id)}
+            className={`text-[11px] px-3 py-1.5 rounded-lg whitespace-nowrap font-semibold transition-all flex-shrink-0 ${
+              filterTab === t.id
+                ? 'bg-[#2E7FFF]/20 text-[#2E7FFF] border border-[#2E7FFF]/30'
+                : 'text-[#7A94B4] hover:text-[#EEF3FA] hover:bg-white/5'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex-1 overflow-y-auto custom-scrollbar px-5 py-4">
+        {filterTab === 'copilot' && (
+        <div className="overflow-hidden rounded-2xl border border-[#2E7FFF]/28 bg-[linear-gradient(135deg,rgba(17,32,64,0.96),rgba(7,17,31,0.98))] shadow-[0_18px_50px_rgba(0,0,0,0.22)]">
+          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[rgba(46,127,255,0.16)] bg-[linear-gradient(90deg,rgba(46,127,255,0.18),rgba(237,29,46,0.10),rgba(7,17,31,0))] px-5 py-4">
+            <div>
+              <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-[#2E7FFF]/30 bg-[#2E7FFF]/12 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-[#8DBDFF]">
+                <Sparkles size={12} />
+                Procurement Copilot
+              </div>
+              <h3 className="text-lg font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
+                Source, compare, check, and negotiate vendors from this page
+              </h3>
+              <p className="mt-1 max-w-3xl text-[12px] leading-5 text-[#9CB1CC]">
+                Current action pack target is <span className="font-bold text-[#EEF3FA]">{pageCopilotVendor.name}</span> for operational recovery. You can switch vendor and targets inside the wizard before generating.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={openPageCopilotModal}
+              className="inline-flex items-center gap-2 rounded-xl border border-[#2E7FFF]/30 bg-[#2E7FFF]/14 px-4 py-2 text-[11px] font-black text-[#8DBDFF] transition-all hover:bg-[#2E7FFF]/22 hover:text-white"
+            >
+              <MessageSquare size={13} />
+              How can I help?
+            </button>
+          </div>
+          <div className="p-4">
+            <VendorCopilotWorkbench
+              result={pageCopilotResult}
+              log={pageCopilotLog}
+              onRun={runPageCopilotAction}
+              onOpenQuoteIntake={openPageQuoteIntake}
+              onOpenRfqWizard={openPageRfqWizard}
+              onOpenBackgroundCheck={openPageBackgroundCheck}
+              onOpenActionPack={openPageActionPack}
+            />
+          </div>
+        </div>
+        )}
+
+        {filterTab !== 'copilot' && (
+        <div className="bg-[rgba(17,32,64,0.85)] border border-[rgba(46,127,255,0.2)] rounded-xl overflow-hidden">
+          <div className="grid grid-cols-[2fr_70px_100px_80px_90px_90px_80px_36px] px-4 py-2 text-[9px] text-[#7A94B4] uppercase tracking-wide border-b border-[rgba(46,127,255,0.1)]">
+            {['Vendor', 'Score', 'Risk Level', 'Trend', 'SLA %', 'Avg Cost', 'Contracts', ''].map(h => (
+              <div key={h}>{h}</div>
+            ))}
+          </div>
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={filterTab}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+            >
+              {filteredVendors.map(({ vendor, score: vs, riskLevel: vr }, i) => (
+                <motion.button
+                  key={vendor.id}
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.04 }}
+                  onClick={() => setSelectedVendor(vendor)}
+                  className="w-full text-left grid grid-cols-[2fr_70px_100px_80px_90px_90px_80px_36px] px-4 py-3 border-b border-[rgba(46,127,255,0.07)] hover:bg-white/[0.025] transition-all items-center group"
+                >
+                  <div className="min-w-0">
+                    <div className="text-[12px] text-[#EEF3FA] font-semibold truncate">{vendor.name}</div>
+                    <div className="text-[10px] text-[#7A94B4] truncate">{vendor.category}</div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[13px] font-bold" style={{ color: scoreColor(vs), fontFamily: 'Space Grotesk, sans-serif' }}>{vs}</span>
+                  </div>
+                  <div>
+                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${riskBg(vr)}`}>{vr}</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <TrendIcon trend={vendor.trend} size={12} />
+                    <span className="text-[10px] text-[#7A94B4]">{vendor.trend}</span>
+                  </div>
+                  <div>
+                    <span className={`text-[12px] font-semibold ${vendor.slaCompliance >= 85 ? 'text-emerald-400' : vendor.slaCompliance >= 72 ? 'text-amber-400' : 'text-red-400'}`}>{vendor.slaCompliance}%</span>
+                    <div className="mt-0.5">
+                      <MiniBar value={vendor.slaCompliance} max={100} color={vendor.slaCompliance >= 85 ? '#38D98A' : vendor.slaCompliance >= 72 ? '#FF9B38' : '#FF4B4B'} />
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-[11px] text-[#EEF3FA]">AED {vendor.avgCostPerJob}</span>
+                    <div className="text-[9px] text-[#7A94B4]">/job</div>
+                  </div>
+                  <div>
+                    <span className="text-[12px] text-[#EEF3FA] font-semibold">{vendor.activeContracts}</span>
+                    <div className="text-[9px] text-[#7A94B4]">exp {vendor.contractExpiry}</div>
+                  </div>
+                  <div className="flex items-center justify-center">
+                    <ChevronRight size={13} className="text-[#7A94B4] group-hover:text-[#EEF3FA] transition-colors" />
+                  </div>
+                </motion.button>
+              ))}
+            </motion.div>
+          </AnimatePresence>
+        </div>
+        )}
+
+        {filterTab !== 'copilot' && filteredVendors.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <ShieldCheck size={32} className="text-[#7A94B4] mb-3 opacity-40" />
+            <p className="text-[12px] text-[#7A94B4]">No vendors match this filter.</p>
+          </div>
+        )}
+      </div>
+
+      <AnimatePresence>
+        {showPageCopilotModal && (
+          <PageProcurementCopilotModal
+            focusVendor={pageCopilotVendor}
+            vendors={allVendors}
+            result={buildVendorCopilotResult(pageCopilotVendor, allVendors, pageCopilotModalAction)}
+            onClose={() => setShowPageCopilotModal(false)}
+            onRun={runPageCopilotModalAction}
+            onOpenProfile={(vendor) => {
+              setShowPageCopilotModal(false);
+              setSelectedVendor(vendor ?? pageCopilotVendor);
+            }}
+            onRfqGenerated={updatePageRfqWorkbench}
+            onBackgroundGenerated={updatePageBackgroundWorkbench}
+            onActionPackGenerated={updatePageActionPackWorkbench}
+            allowVendorSwitch
+          />
+        )}
+        {showAddVendorWizard && (
+          <AddVendorWizard
+            onClose={() => setShowAddVendorWizard(false)}
+            onCreate={createVendor}
+          />
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
