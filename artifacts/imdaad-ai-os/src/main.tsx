@@ -6,6 +6,7 @@ import { FieldPortal } from "./pages/FieldPortal";
 import { FieldJobDeepLink } from "./pages/FieldJobDeepLink";
 import { LoginPage } from "./components/auth/LoginPage";
 import { FieldOpsCapture } from "./modules/fieldops/FieldOpsCapture";
+import { OOHClientPage, OOHFieldCapture, OOHInspectionReport, OOHOperatorApp } from "./modules/ooh";
 import { ModuleBrochure } from "./pages/ModuleBrochure";
 import { InteractiveDemoWalkthrough } from "./modules/demo";
 import { IncidentProvider, useIncidents } from "./context/IncidentContext";
@@ -48,6 +49,10 @@ function Root() {
   const isReport = path === '/report' || path === '/report/';
   const isField = path === '/field' || path === '/field/' || path.startsWith('/field/');
   const fieldOpsCaptureMatch = path.match(/^\/fieldops\/survey\/([^/]+)\/capture/);
+  const oohFieldCaptureMatch = path.match(/^\/ooh\/field\/([^/]+)/);
+  const oohClientPageMatch = path.match(/^\/ooh\/client\/([^/]+)/);
+  const oohInspectionReportMatch = path.match(/^\/ooh\/report\/([^/]+)/);
+  const isOoh = path === '/ooh' || path === '/ooh/' || path.startsWith('/ooh/');
   const isLogin = path === '/login' || path === '/login/';
   const isPropertiesDemo = path === '/demo/properties' || path === '/demo/properties/';
   const isBrochuresHost = window.location.hostname === 'brochures.4cgrc.com';
@@ -58,6 +63,22 @@ function Root() {
 
   if (isLogin) {
     return <LoginPage />;
+  }
+
+  if (oohFieldCaptureMatch) {
+    return <OOHFieldCapture assignmentId={oohFieldCaptureMatch[1]} />;
+  }
+
+  if (oohClientPageMatch) {
+    return <OOHClientPage token={oohClientPageMatch[1]} />;
+  }
+
+  if (oohInspectionReportMatch) {
+    return <OOHInspectionReport submissionId={oohInspectionReportMatch[1]} />;
+  }
+
+  if (isOoh) {
+    return <OOHOperatorApp />;
   }
 
   if (isPropertiesDemo) {

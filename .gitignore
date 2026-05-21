@@ -57,3 +57,4 @@ artifacts/api-server/uploads/*.ogg
 
 # Runtime submission snapshots
 /data/
+artifacts/api-server/data/
