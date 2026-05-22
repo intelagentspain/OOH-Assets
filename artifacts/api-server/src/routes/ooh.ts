@@ -217,6 +217,8 @@ function seedStore(): OOHStore {
       ],
       surveyHistory: [
         { id: "SUB-SZR-001", date: isoDaysFromNow(-2), score: 96, status: "Approved", issues: [] },
+        { id: "SUB-SZR-001-WEEK-2", date: isoDaysFromNow(-9), score: 95, status: "Approved", issues: [] },
+        { id: "SUB-SZR-001-WEEK-3", date: isoDaysFromNow(-16), score: 94, status: "Approved", issues: [] },
       ],
     },
     {
