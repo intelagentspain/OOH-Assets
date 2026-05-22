@@ -147,6 +147,61 @@ function ReportMissing() {
   );
 }
 
+function buildHistorySubmission(data: OOHBootstrap, submissionId: string): { submission: OOHSubmission; asset: OOHAsset } | null {
+  const asset = data.assets.find(item => item.surveyHistory.some(history => history.id === submissionId));
+  const history = asset?.surveyHistory.find(item => item.id === submissionId);
+  if (!asset || !history) return null;
+
+  const categories: Array<NonNullable<OOHEvidenceItem['photoCategory']>> = ['Wide', 'Close-up', 'Angle'];
+  const existingPhoto = asset.evidence.find(item => item.type === 'photo');
+  const evidence: OOHEvidenceItem[] = categories.map(category => ({
+    id: `${history.id}-${category.toLowerCase().replace(/\s+/g, '-')}`,
+    type: 'photo',
+    label: `${category} quality inspection photo`,
+    url: existingPhoto?.url,
+    capturedAt: history.date,
+    capturedBy: existingPhoto?.capturedBy ?? 'Field QA team',
+    gps: { lat: asset.lat, lng: asset.lng },
+    notes: history.issues.length ? history.issues.join(', ') : 'Inspection evidence linked from asset quality history.',
+    photoCategory: category,
+    qrVerified: true,
+    gpsAccuracyMeters: existingPhoto?.gpsAccuracyMeters ?? 6,
+    offlineCaptured: false,
+    syncStatus: 'Synced',
+    clientPublishStatus: history.status === 'Approved' ? 'Published' : 'Internal Only',
+    status: history.status,
+  }));
+
+  return {
+    asset,
+    submission: {
+      id: history.id,
+      assignmentId: `HIST-${asset.id}`,
+      assetId: asset.id,
+      submittedBy: existingPhoto?.capturedBy ?? 'Field QA team',
+      submittedAt: history.date,
+      gps: { lat: asset.lat, lng: asset.lng, label: asset.address },
+      score: history.score,
+      status: history.status,
+      issues: history.issues,
+      answers: [
+        { questionId: 'creative', question: 'Creative installed matches campaign booking', answer: asset.evidenceStatus === 'Ready' ? 'Pass' : 'Review required' },
+        { questionId: 'condition', question: 'Structure, frame, vinyl or screen condition', answer: history.issues.length ? 'Needs attention' : 'Pass' },
+        { questionId: 'photo', question: 'Capture wide, close-up and angle photos', answer: `${evidence.length} photos linked` },
+      ],
+      evidence,
+      reviewer: 'Maya Haddad',
+      qrVerified: true,
+      gpsAccuracyMeters: 6,
+      photoCategories: categories,
+      offlineCaptured: false,
+      syncStatus: 'Synced',
+      reviewerNotes: history.issues.length ? history.issues.join(', ') : 'Weekly quality inspection closed with client-view evidence.',
+      clientPublishStatus: history.status === 'Approved' ? 'Published' : 'Internal Only',
+    },
+  };
+}
+
 export function OOHInspectionReport({ submissionId }: { submissionId: string }) {
   const [data, setData] = useState<OOHBootstrap>(fallbackOOHBootstrap);
   const [notice, setNotice] = useState('Loading latest inspection evidence...');
@@ -163,8 +218,10 @@ export function OOHInspectionReport({ submissionId }: { submissionId: string }) 
     };
   }, []);
 
-  const submission = data.submissions.find(item => item.id === submissionId);
-  const asset = submission ? data.assets.find(item => item.id === submission.assetId) : undefined;
+  const capturedSubmission = data.submissions.find(item => item.id === submissionId);
+  const historySubmission = capturedSubmission ? null : buildHistorySubmission(data, submissionId);
+  const submission = capturedSubmission ?? historySubmission?.submission;
+  const asset = capturedSubmission ? data.assets.find(item => item.id === capturedSubmission.assetId) : historySubmission?.asset;
   const assignment = submission ? data.assignments.find(item => item.id === submission.assignmentId) : undefined;
   const photoEvidence = useMemo(() => submission?.evidence.filter(item => item.type === 'photo') ?? [], [submission]);
   const otherEvidence = useMemo(() => submission?.evidence.filter(item => item.type !== 'photo') ?? [], [submission]);

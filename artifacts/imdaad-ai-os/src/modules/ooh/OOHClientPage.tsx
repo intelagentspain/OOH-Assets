@@ -1,13 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Download, FileCheck2, Globe2, MapPin, ShieldCheck, Timer, TriangleAlert } from 'lucide-react';
+import { Camera, CheckCircle2, Download, ExternalLink, FileCheck2, Globe2, Image, MapPin, ShieldCheck, Timer, TriangleAlert } from 'lucide-react';
 import { CircleMarker, MapContainer, Popup, TileLayer } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import { fetchOOHClientPage } from './api';
 import { fallbackOOHBootstrap } from './seedData';
-import type { OOHAsset, OOHClientPagePayload } from './types';
+import { assetPreviewPhotoAlt, assetPreviewPhotoSrc, evidencePhotoAlt, evidencePhotoObjectPosition, evidencePhotoSrc } from './evidenceVisual';
+import type { OOHEvidenceItem, OOHAsset, OOHClientPagePayload, OOHSubmission } from './types';
 
 function fmt(value: string): string {
   return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(value));
+}
+
+function fmtDateTime(value: string): string {
+  return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value));
 }
 
 function markerColor(asset: OOHAsset): string {
@@ -65,6 +70,120 @@ function Metric({ label, value, icon: Icon }: { label: string; value: string | n
   );
 }
 
+function publishedSubmissionForAsset(assetId: string, submissions: OOHSubmission[]): OOHSubmission | undefined {
+  return submissions
+    .filter(submission => submission.assetId === assetId && submission.status === 'Approved' && submission.clientPublishStatus !== 'Blocked')
+    .sort((a, b) => Date.parse(b.submittedAt) - Date.parse(a.submittedAt))[0];
+}
+
+function publishedAssetEvidence(asset: OOHAsset): OOHEvidenceItem[] {
+  return asset.evidence.filter(item => item.type === 'photo' && item.clientPublishStatus !== 'Blocked' && ['Ready', 'Approved'].includes(item.status));
+}
+
+function galleryItemsForAsset(asset: OOHAsset, submissions: OOHSubmission[]) {
+  const submission = publishedSubmissionForAsset(asset.id, submissions);
+  const submissionPhotos = submission?.evidence.filter(item => item.type === 'photo' && item.clientPublishStatus !== 'Blocked') ?? [];
+  const sourcePhotos = submissionPhotos.length ? submissionPhotos : publishedAssetEvidence(asset);
+  const latestInspection = asset.surveyHistory[0];
+  const categories: Array<NonNullable<OOHEvidenceItem['photoCategory']>> = ['Wide', 'Close-up', 'Angle'];
+  const expandedPhotos = sourcePhotos.length > 0 && sourcePhotos.length < categories.length
+    ? categories.map((category, index): OOHEvidenceItem => {
+      const source = sourcePhotos[index] ?? sourcePhotos[0];
+      return {
+        ...source,
+        id: `${source.id}-${category.toLowerCase().replace(/\s+/g, '-')}`,
+        label: category === source.photoCategory ? source.label : `${category} quality inspection view`,
+        photoCategory: category,
+      };
+    })
+    : sourcePhotos;
+
+  return expandedPhotos.map((item, index) => ({
+    key: `${asset.id}-${item.id}-${index}`,
+    asset,
+    item,
+    reportId: submission?.id ?? latestInspection?.id,
+    score: submission?.score ?? latestInspection?.score ?? asset.healthScore,
+    capturedAt: item.capturedAt || submission?.submittedAt || latestInspection?.date || asset.lastSurveyAt,
+    capturedBy: item.capturedBy || submission?.submittedBy || 'Field QA team',
+  }));
+}
+
+function GalleryCard({ entry }: { entry: ReturnType<typeof galleryItemsForAsset>[number] }) {
+  return (
+    <article className="overflow-hidden rounded-lg border border-white/10 bg-[#07111F]">
+      <div className="relative h-56 border-b border-white/10 bg-[#0B172A]">
+        <img
+          src={evidencePhotoSrc(entry.item, entry.asset)}
+          alt={evidencePhotoAlt(entry.item, entry.asset)}
+          className="h-full w-full object-cover"
+          style={{ objectPosition: evidencePhotoObjectPosition(entry.asset) }}
+        />
+        <div className="absolute left-3 top-3 rounded-full border border-white/15 bg-[#07111F]/86 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-white backdrop-blur">
+          {entry.item.photoCategory ?? 'Inspection photo'}
+        </div>
+        <div className="absolute bottom-3 left-3 right-3 rounded-lg border border-white/10 bg-[#07111F]/88 p-3 backdrop-blur">
+          <p className="line-clamp-1 text-sm font-black text-white">{entry.item.label}</p>
+          <p className="mt-1 text-xs text-[#B8C7DB]">{entry.asset.name}</p>
+        </div>
+      </div>
+      <div className="grid grid-cols-3 border-b border-white/10 text-xs">
+        <div className="border-r border-white/10 p-3">
+          <p className="font-bold uppercase tracking-wide text-[#7A94B4]">Score</p>
+          <p className="mt-1 font-black text-white">{entry.score}%</p>
+        </div>
+        <div className="border-r border-white/10 p-3">
+          <p className="font-bold uppercase tracking-wide text-[#7A94B4]">GPS</p>
+          <p className="mt-1 font-black text-white">{entry.item.gpsAccuracyMeters ?? 8}m</p>
+        </div>
+        <div className="p-3">
+          <p className="font-bold uppercase tracking-wide text-[#7A94B4]">QR</p>
+          <p className="mt-1 font-black text-white">{entry.item.qrVerified ? 'Verified' : 'N/A'}</p>
+        </div>
+      </div>
+      <div className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-xs text-[#9DB4D0]">{fmtDateTime(entry.capturedAt)}</p>
+          <p className="mt-1 text-xs font-bold text-[#7A94B4]">{entry.capturedBy}</p>
+        </div>
+        {entry.reportId && (
+          <a className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-[#2E7FFF]/35 bg-[#2E7FFF]/12 px-3 py-2 text-xs font-black text-[#9FC8FF] hover:bg-[#2E7FFF]/20 hover:text-white" href={`/ooh/report/${entry.reportId}`}>
+            View report <ExternalLink size={13} />
+          </a>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function WeeklyInspectionLinks({ asset }: { asset: OOHAsset }) {
+  const inspections = asset.surveyHistory.slice(0, 6);
+
+  return (
+    <div className="mt-3 rounded-lg border border-white/10 bg-[#0B172A] p-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Weekly inspections</p>
+        <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-bold text-[#B8C7DB]">{inspections.length} reports</span>
+      </div>
+      <div className="mt-3 grid gap-2">
+        {inspections.map((inspection, index) => (
+          <a
+            key={inspection.id}
+            className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-[#07111F] px-3 py-2 text-sm transition hover:border-[#7EB8F7]/45 hover:bg-white/[0.035]"
+            href={`/ooh/report/${inspection.id}`}
+          >
+            <span className="min-w-0">
+              <span className="block font-black text-white">Week {index + 1} quality inspection</span>
+              <span className="mt-0.5 block text-xs text-[#9DB4D0]">{fmt(inspection.date)} - score {inspection.score}% - {inspection.status}</span>
+            </span>
+            <ExternalLink size={14} className="shrink-0 text-[#7EB8F7]" />
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function OOHClientPage({ token }: { token: string }) {
   const [payload, setPayload] = useState<OOHClientPagePayload>({
     page: fallbackOOHBootstrap.clientPages[0],
@@ -88,6 +207,7 @@ export function OOHClientPage({ token }: { token: string }) {
   const { page, assets, submissions } = payload;
   const publishedSubmissions = submissions.filter(submission => submission.status === 'Approved' && submission.clientPublishStatus !== 'Blocked');
   const pendingItems = assets.filter(asset => asset.evidenceStatus !== 'Ready').length;
+  const galleryItems = assets.flatMap(asset => galleryItemsForAsset(asset, submissions));
 
   return (
     <div className="min-h-screen bg-[#07111F] text-[#EEF3FA]">
@@ -167,6 +287,27 @@ export function OOHClientPage({ token }: { token: string }) {
         </section>
 
         <section className="mt-5 rounded-lg border border-white/10 bg-[#0B172A] p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <Image size={18} className="text-[#7EB8F7]" />
+                <h2 className="text-xl font-black text-white">Latest Quality Inspection Gallery</h2>
+              </div>
+              <p className="mt-1 max-w-3xl text-sm leading-6 text-[#9DB4D0]">Published photo evidence from the latest approved field inspection. Internal rework and blocked photos stay hidden from this client view.</p>
+            </div>
+            <span className="inline-flex w-fit items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-black text-emerald-100">
+              <Camera size={14} /> {galleryItems.length} client-visible images
+            </span>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {galleryItems.map(entry => <GalleryCard key={entry.key} entry={entry} />)}
+            {galleryItems.length === 0 && (
+              <div className="rounded-lg border border-white/10 bg-[#07111F] p-4 text-sm text-[#9DB4D0]">No approved inspection images have been published to this client page yet.</div>
+            )}
+          </div>
+        </section>
+
+        <section className="mt-5 rounded-lg border border-white/10 bg-[#0B172A] p-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <h2 className="text-xl font-black text-white">Assets and Proof Status</h2>
             <button className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold text-white" onClick={() => setNotice('Campaign evidence pack prepared for export.')}>
@@ -194,6 +335,7 @@ export function OOHClientPage({ token }: { token: string }) {
                   <p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Audience / location reference</p>
                   <p className="mt-1 text-sm leading-5 text-[#B8C7DB]">{asset.audienceReference ?? 'GIS/GPS verified OOH asset with route and market attributes.'}</p>
                 </div>
+                <WeeklyInspectionLinks asset={asset} />
               </div>
             ))}
           </div>

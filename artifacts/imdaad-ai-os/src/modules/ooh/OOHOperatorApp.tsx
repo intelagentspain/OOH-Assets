@@ -58,8 +58,8 @@ interface AssetForm {
   address: string;
   lat: string;
   lng: string;
-  client: string;
-  campaign: string;
+  frequency: string;
+  network: string;
 }
 
 type AssetIntakeMode = 'choice' | 'single' | 'bulk';
@@ -134,6 +134,8 @@ const oohTabPaths: Record<OOHTab, string> = {
 };
 
 const assetFormatOptions = ['Unipole billboard', 'Digital screen', 'Bridge banner', 'Bus shelter', 'Wall wrap', 'Street furniture'];
+const assetFrequencyOptions = ['Daily', 'Weekly', 'Monthly', 'Quarterly', 'Yearly', 'Other'];
+const assetNetworkOptions = ['Dubai', 'Sharjah', 'Abu Dhabi', 'Ajman', 'Ras Al Khaimah', 'Fujairah', 'Umm Al Quwain'];
 const marketOptions = ['All markets', 'Dubai', 'Abu Dhabi', 'Sharjah'];
 const recurrenceOptions: AssignmentForm['recurrence'][] = ['One-time', 'Weekly', 'Monthly', 'Quarterly'];
 const defaultInstallationTeams = ['Falcon Field Team', 'Capital Survey Crew', 'Coastal QA Team', 'In-house Install Team', 'Certified Print Vendor'];
@@ -491,8 +493,8 @@ function buildNewAssetForm(): AssetForm {
     address: 'DXB approach road, terminal corridor',
     lat: '25.2522',
     lng: '55.3657',
-    client: 'Skyline Telecom',
-    campaign: 'Roaming Pass Launch',
+    frequency: 'Monthly',
+    network: 'Dubai',
   };
 }
 
@@ -502,27 +504,39 @@ function isDigitalFormat(format: string): boolean {
 
 function assetPayloadFromForm(form: AssetForm, attributes: string[] = ['Registered through intake wizard', 'Awaiting first field survey']): Partial<OOHAsset> {
   const digital = isDigitalFormat(form.format);
+  const networkCampaign = form.network.toLowerCase().includes('network') ? form.network : `${form.network} Network`;
   return {
-    ...form,
+    name: form.name,
+    format: form.format,
+    dimensions: form.dimensions,
+    market: form.market,
+    route: form.route,
+    address: form.address,
+    campaign: networkCampaign,
     lat: Number(form.lat),
     lng: Number(form.lng),
+    client: 'Unassigned client',
     status: 'Install Due',
     permitStatus: 'Pending',
     installStatus: 'Scheduled',
     evidenceStatus: 'Missing',
     healthScore: 88,
     owner: 'OOH Assets',
-    buyerContact: 'Client media buyer',
+    buyerContact: 'To be assigned during campaign commissioning',
     bookedFrom: new Date().toISOString(),
     bookedTo: new Date(Date.now() + 30 * 86400000).toISOString(),
     installSla: 'Install proof required before go-live',
     proofSla: 'Awaiting first evidence review',
     playerUptime: digital ? 99.1 : 100,
-    audienceReference: `${form.route} GIS point with field survey pending`,
+    audienceReference: `${form.network} network GIS point with field survey pending`,
     illumination: digital ? 'Digital' : 'Front-lit',
     powerStatus: digital ? 'Online' : 'Not Required',
     playerStatus: digital ? 'Online' : 'Not Installed',
-    attributes,
+    attributes: [
+      ...attributes.filter(attribute => !attribute.startsWith('Frequency:') && !attribute.startsWith('Network:')),
+      `Frequency: ${form.frequency}`,
+      `Network: ${form.network}`,
+    ],
   };
 }
 
@@ -601,8 +615,8 @@ function parseBulkAssetCsv(text: string): BulkAssetPreview[] {
       address: valueFromImportedRow(row, ['address', 'location', 'site address'], 'Field verified address pending'),
       lat: valueFromImportedRow(row, ['gps lat', 'latitude', 'lat'], fallbackLat.toFixed(4)),
       lng: valueFromImportedRow(row, ['gps lng', 'longitude', 'lng', 'lon'], fallbackLng.toFixed(4)),
-      client: valueFromImportedRow(row, ['client', 'brand', 'advertiser'], 'Unassigned client'),
-      campaign: valueFromImportedRow(row, ['campaign', 'booking', 'work order'], 'Inventory reserve'),
+      frequency: valueFromImportedRow(row, ['frequency', 'inspection frequency', 'survey frequency', 'recurrence'], 'Monthly'),
+      network: valueFromImportedRow(row, ['network', 'inventory network', 'market network', 'campaign'], valueFromImportedRow(row, ['market', 'city', 'emirate'], 'Dubai')),
     };
   }).filter(asset => asset.name.trim().length > 0);
 }
@@ -619,8 +633,8 @@ function buildPreparedBulkAssets(): BulkAssetPreview[] {
       address: 'Marina promenade, Dubai',
       lat: '25.0807',
       lng: '55.1408',
-      client: 'Harbour Retail',
-      campaign: 'Weekend Retail Push',
+      frequency: 'Monthly',
+      network: 'Dubai',
     },
     {
       rowNumber: 2,
@@ -632,8 +646,8 @@ function buildPreparedBulkAssets(): BulkAssetPreview[] {
       address: 'Yas Island approach, Abu Dhabi',
       lat: '24.4881',
       lng: '54.6071',
-      client: 'Etihad Holidays',
-      campaign: 'Summer Stopover',
+      frequency: 'Quarterly',
+      network: 'Abu Dhabi',
     },
     {
       rowNumber: 3,
@@ -645,8 +659,8 @@ function buildPreparedBulkAssets(): BulkAssetPreview[] {
       address: 'University City stop 4, Sharjah',
       lat: '25.2862',
       lng: '55.4635',
-      client: 'CityPay',
-      campaign: 'Tap and Go',
+      frequency: 'Weekly',
+      network: 'Sharjah',
     },
   ];
 }
@@ -1122,6 +1136,44 @@ function TeamSelectWithNew({
         <input
           className={`mt-2 ${controlClass}`}
           placeholder="Enter new installation team"
+          value={value}
+          onChange={event => onChange(event.target.value)}
+        />
+      )}
+    </label>
+  );
+}
+
+const addNewNetworkValue = '__add_new_network__';
+
+function NetworkSelectWithNew({
+  value,
+  options,
+  onChange,
+}: {
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+}) {
+  const cleanOptions = Array.from(new Set(options.map(option => option.trim()).filter(Boolean)));
+  const isExistingNetwork = cleanOptions.includes(value);
+  const controlClass = 'h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none';
+
+  return (
+    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">
+      Network
+      <select
+        className={`mt-1 ${controlClass}`}
+        value={isExistingNetwork ? value : addNewNetworkValue}
+        onChange={event => onChange(event.target.value === addNewNetworkValue ? '' : event.target.value)}
+      >
+        {cleanOptions.map(network => <option key={network} value={network}>{network}</option>)}
+        <option value={addNewNetworkValue}>+ Add new network</option>
+      </select>
+      {!isExistingNetwork && (
+        <input
+          className={`mt-2 ${controlClass}`}
+          placeholder="Enter new network"
           value={value}
           onChange={event => onChange(event.target.value)}
         />
@@ -4771,7 +4823,7 @@ export function OOHOperatorApp() {
       const rows = parseBulkAssetCsv(await file.text());
       if (!rows.length) {
         setBulkAssetRows([]);
-        setBulkUploadError('No asset rows were found. Upload a CSV with asset name, format, dimensions, market, route, address, gps lat, gps lng, client and campaign.');
+        setBulkUploadError('No asset rows were found. Upload a CSV with asset name, format, dimensions, market, route, address, gps lat, gps lng, frequency and network.');
         return;
       }
       setBulkAssetRows(rows);
@@ -5666,7 +5718,7 @@ export function OOHOperatorApp() {
                       <UploadCloud size={22} />
                     </span>
                     <span className="mt-5 block text-xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Upload Bulk File</span>
-                    <span className="mt-3 block text-sm leading-6 text-[#B8C7DB]">Import a CSV asset register with GPS, route, market, client and campaign fields, then review rows before adding them.</span>
+                    <span className="mt-3 block text-sm leading-6 text-[#B8C7DB]">Import a CSV asset register with GPS, route, market, frequency and network fields, then review rows before adding them.</span>
                     <span className="mt-5 inline-flex items-center gap-2 text-sm font-black text-[#7EB8F7] group-hover:text-white">
                       Continue to upload <ExternalLink size={14} />
                     </span>
@@ -5692,8 +5744,17 @@ export function OOHOperatorApp() {
                     <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4] md:col-span-2">Address<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.address} onChange={event => setAssetForm({ ...assetForm, address: event.target.value })} /></label>
                     <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">GPS lat<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.lat} onChange={event => setAssetForm({ ...assetForm, lat: event.target.value })} /></label>
                     <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">GPS lng<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.lng} onChange={event => setAssetForm({ ...assetForm, lng: event.target.value })} /></label>
-                    <ClientSelectWithNew label="Client" value={assetForm.client} options={clientOptions} onChange={client => setAssetForm({ ...assetForm, client })} />
-                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Campaign<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.campaign} onChange={event => setAssetForm({ ...assetForm, campaign: event.target.value })} /></label>
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">
+                      Frequency
+                      <select
+                        className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none"
+                        value={assetForm.frequency}
+                        onChange={event => setAssetForm({ ...assetForm, frequency: event.target.value })}
+                      >
+                        {assetFrequencyOptions.map(option => <option key={option} value={option}>{option}</option>)}
+                      </select>
+                    </label>
+                    <NetworkSelectWithNew value={assetForm.network} options={assetNetworkOptions} onChange={network => setAssetForm({ ...assetForm, network })} />
                   </div>
                   <div className="mt-5 flex flex-col gap-2 border-t border-white/10 pt-4 sm:flex-row sm:items-center sm:justify-between">
                     <p className="text-xs leading-5 text-[#9DB4D0]">New records are placed on GIS immediately and marked for first field proof.</p>
@@ -5733,7 +5794,7 @@ export function OOHOperatorApp() {
                       </div>
                       <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">{`${bulkAssetRows.length} rows ready`}</Pill>
                     </div>
-                    <p className="mt-3 text-xs leading-5 text-[#9DB4D0]">Expected CSV headers: asset name, format, dimensions, market, route, address, gps lat, gps lng, client, campaign.</p>
+                    <p className="mt-3 text-xs leading-5 text-[#9DB4D0]">Expected CSV headers: asset name, format, dimensions, market, route, address, gps lat, gps lng, frequency, network.</p>
                     {bulkUploadError && <p className="mt-3 rounded-lg border border-red-400/25 bg-red-400/10 px-3 py-2 text-sm font-bold text-red-100">{bulkUploadError}</p>}
                   </div>
 
@@ -5745,7 +5806,7 @@ export function OOHOperatorApp() {
                           <th className="px-3 py-3">Market</th>
                           <th className="px-3 py-3">Format</th>
                           <th className="px-3 py-3">GPS</th>
-                          <th className="px-3 py-3">Campaign</th>
+                          <th className="px-3 py-3">Network / Frequency</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -5759,8 +5820,8 @@ export function OOHOperatorApp() {
                             <td className="px-3 py-3 text-[#B8C7DB]">{row.format}</td>
                             <td className="px-3 py-3 text-[#B8C7DB]">{row.lat}, {row.lng}</td>
                             <td className="px-3 py-3">
-                              <span className="block font-bold text-white">{row.campaign}</span>
-                              <span className="text-xs text-[#7A94B4]">{row.client}</span>
+                              <span className="block font-bold text-white">{row.network}</span>
+                              <span className="text-xs text-[#7A94B4]">{row.frequency}</span>
                             </td>
                           </tr>
                         ))}
