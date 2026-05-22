@@ -32,6 +32,12 @@ function fmtDateTime(value: string): string {
   }).format(new Date(value));
 }
 
+function addDays(value: string, days: number): string {
+  const date = new Date(value);
+  date.setDate(date.getDate() + days);
+  return date.toISOString();
+}
+
 function statusClass(value: string): string {
   if (['Approved', 'Ready', 'Published', 'Synced', 'Valid', 'Online', 'Pass'].includes(value)) return 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200';
   if (['Rejected', 'Blocked', 'Offline', 'Fail', 'Expired'].includes(value)) return 'border-red-400/25 bg-red-400/10 text-red-200';
@@ -148,8 +154,29 @@ function ReportMissing() {
 }
 
 function buildHistorySubmission(data: OOHBootstrap, submissionId: string): { submission: OOHSubmission; asset: OOHAsset } | null {
-  const asset = data.assets.find(item => item.surveyHistory.some(history => history.id === submissionId));
-  const history = asset?.surveyHistory.find(item => item.id === submissionId);
+  let asset = data.assets.find(item => item.surveyHistory.some(history => history.id === submissionId));
+  let history = asset?.surveyHistory.find(item => item.id === submissionId);
+
+  if (!asset || !history) {
+    const weeklyMatch = submissionId.match(/^(.*)-WEEK-(\d+)$/);
+    if (weeklyMatch) {
+      const baseHistoryId = weeklyMatch[1];
+      const weekIndex = Number(weeklyMatch[2]) - 1;
+      const sourceAsset = data.assets.find(item => item.surveyHistory.some(row => row.id === baseHistoryId));
+      const sourceHistory = sourceAsset?.surveyHistory.find(row => row.id === baseHistoryId);
+      if (sourceAsset && sourceHistory && Number.isFinite(weekIndex) && weekIndex >= 0) {
+        asset = sourceAsset;
+        history = {
+          ...sourceHistory,
+          id: submissionId,
+          date: addDays(sourceHistory.date, -7 * weekIndex),
+          score: Math.max(70, sourceHistory.score - weekIndex),
+          issues: weekIndex === 0 ? sourceHistory.issues : [],
+        };
+      }
+    }
+  }
+
   if (!asset || !history) return null;
 
   const categories: Array<NonNullable<OOHEvidenceItem['photoCategory']>> = ['Wide', 'Close-up', 'Angle'];

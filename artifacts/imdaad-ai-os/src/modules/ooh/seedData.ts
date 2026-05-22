@@ -69,7 +69,11 @@ export const fallbackOOHBootstrap: OOHBootstrap = {
           status: 'Approved',
         },
       ],
-      surveyHistory: [{ id: 'SUB-SZR-001', date: iso(-2), score: 96, status: 'Approved', issues: [] }],
+      surveyHistory: [
+        { id: 'SUB-SZR-001', date: iso(-2), score: 96, status: 'Approved', issues: [] },
+        { id: 'SUB-SZR-001-WEEK-2', date: iso(-9), score: 95, status: 'Approved', issues: [] },
+        { id: 'SUB-SZR-001-WEEK-3', date: iso(-16), score: 94, status: 'Approved', issues: [] },
+      ],
     },
     {
       id: 'OOH-DXB-MALL-014',
