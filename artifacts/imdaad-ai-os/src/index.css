@@ -75,6 +75,175 @@ body {
   background: #0A1628 !important;
 }
 
+.ooh-modern-map {
+  background:
+    radial-gradient(circle at 30% 22%, rgba(46, 127, 255, 0.16), transparent 34%),
+    linear-gradient(135deg, #07111f, #0a1628) !important;
+}
+
+.ooh-modern-map .leaflet-tile-pane {
+  filter: saturate(1.12) contrast(1.08) brightness(0.98);
+}
+
+.ooh-modern-map .leaflet-control-zoom {
+  overflow: hidden;
+  border: 1px solid rgba(126, 184, 247, 0.24) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.36) !important;
+}
+
+.ooh-modern-map .leaflet-control-zoom a {
+  width: 34px !important;
+  height: 34px !important;
+  border-color: rgba(126, 184, 247, 0.18) !important;
+  background: rgba(7, 17, 31, 0.92) !important;
+  color: #EEF3FA !important;
+  line-height: 32px !important;
+  backdrop-filter: blur(14px);
+}
+
+.ooh-modern-map .leaflet-control-zoom a:hover {
+  background: rgba(46, 127, 255, 0.24) !important;
+  color: #ffffff !important;
+}
+
+.ooh-modern-map .leaflet-control-attribution {
+  border-top-left-radius: 8px;
+  background: rgba(7, 17, 31, 0.72) !important;
+  color: rgba(216, 230, 248, 0.78) !important;
+  backdrop-filter: blur(12px);
+}
+
+.ooh-modern-map .leaflet-control-attribution a {
+  color: #7EB8F7 !important;
+}
+
+.ooh-route-primary {
+  filter: drop-shadow(0 0 3px rgba(126, 184, 247, 0.22));
+  stroke-linecap: round;
+}
+
+.ooh-route-muted {
+  stroke-linecap: round;
+  filter: none;
+}
+
+.ooh-crew-marker {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  color: #EEF3FA;
+  font-family: 'DM Sans', sans-serif;
+}
+
+.ooh-crew-bearing {
+  position: absolute;
+  left: 19px;
+  top: 20px;
+  width: 28px;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--crew-color), rgba(126, 184, 247, 0));
+  transform: rotate(-10deg);
+  opacity: 0.68;
+}
+
+.ooh-crew-dot {
+  position: absolute;
+  left: 4px;
+  top: 6px;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 2px solid color-mix(in srgb, var(--crew-color) 74%, #D8E6F8 26%);
+  border-radius: 999px;
+  background: #081426;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.44), 0 0 0 4px rgba(7, 17, 31, 0.68);
+}
+
+.ooh-crew-dot span {
+  color: #EEF3FA;
+  font-size: 10px;
+  font-weight: 950;
+  letter-spacing: 0;
+}
+
+.ooh-crew-marker.is-selected .ooh-crew-dot {
+  border-color: #D8E6F8;
+  background: #0D1E37;
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.46), 0 0 0 5px color-mix(in srgb, var(--crew-color) 18%, transparent);
+}
+
+.ooh-crew-marker.is-selected .ooh-crew-bearing {
+  opacity: 0.9;
+}
+
+.ooh-target-marker {
+  position: relative;
+  width: 28px;
+  height: 28px;
+}
+
+.ooh-target-ring {
+  position: absolute;
+  inset: 4px;
+  border: 2px solid var(--target-color);
+  border-radius: 7px;
+  background: rgba(8, 20, 38, 0.92);
+  box-shadow: 0 0 0 4px rgba(7, 17, 31, 0.64), 0 10px 22px rgba(0, 0, 0, 0.38);
+  transform: rotate(45deg);
+}
+
+.ooh-target-core {
+  position: absolute;
+  inset: 11px;
+  border-radius: 999px;
+  background: var(--target-color);
+  box-shadow: none;
+}
+
+.ooh-target-marker.is-selected .ooh-target-ring {
+  background: color-mix(in srgb, var(--target-color) 18%, rgba(8, 20, 38, 0.92));
+}
+
+.ooh-start-marker {
+  position: relative;
+  width: 28px;
+  height: 28px;
+}
+
+.ooh-start-marker::before {
+  position: absolute;
+  inset: 3px;
+  content: "";
+  border: 2px solid #D8E6F8;
+  border-radius: 999px;
+  background: rgba(8, 20, 38, 0.94);
+  box-shadow: 0 0 0 4px rgba(7, 17, 31, 0.66), 0 10px 20px rgba(0, 0, 0, 0.4);
+}
+
+.ooh-start-core {
+  position: absolute;
+  inset: 10px;
+  border-radius: 999px;
+  background: #D8E6F8;
+}
+
+.ooh-start-marker.is-selected::before {
+  border-color: #7EB8F7;
+}
+
+.ooh-start-marker.is-selected .ooh-start-core {
+  background: #7EB8F7;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ooh-route-primary {
+    animation: none;
+  }
+}
+
 .leaflet-popup-content-wrapper,
 .leaflet-popup-tip {
   background: #112040 !important;
@@ -94,6 +263,75 @@ body {
   padding: 8px !important;
   top: 6px !important;
   right: 6px !important;
+}
+
+.leaflet-popup.ooh-asset-popup .leaflet-popup-content-wrapper {
+  overflow: hidden !important;
+  background: #0B172A !important;
+  border-color: rgba(46, 127, 255, 0.35) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.62) !important;
+}
+
+.leaflet-popup.ooh-asset-popup .leaflet-popup-content {
+  width: auto !important;
+}
+
+.ooh-modern-map .leaflet-popup-pane {
+  z-index: 720 !important;
+}
+
+.leaflet-popup.ooh-asset-popup .leaflet-popup-close-button {
+  top: 10px !important;
+  right: 10px !important;
+  width: 26px !important;
+  height: 26px !important;
+  padding: 0 !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  border-radius: 999px !important;
+  background: rgba(7, 17, 31, 0.82) !important;
+  color: #D8E6F8 !important;
+  line-height: 24px !important;
+  text-align: center !important;
+  backdrop-filter: blur(10px);
+}
+
+.leaflet-popup.ooh-dispatch-popup .leaflet-popup-content-wrapper {
+  overflow: hidden !important;
+  background: #081426 !important;
+  border-color: rgba(126, 184, 247, 0.28) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.56) !important;
+}
+
+.leaflet-popup.ooh-dispatch-popup .leaflet-popup-tip {
+  background: #081426 !important;
+  border-color: rgba(126, 184, 247, 0.28) !important;
+}
+
+.leaflet-popup.ooh-dispatch-popup .leaflet-popup-content {
+  width: auto !important;
+}
+
+.leaflet-popup.ooh-dispatch-popup .leaflet-popup-close-button {
+  top: 10px !important;
+  right: 10px !important;
+  display: grid !important;
+  width: 26px !important;
+  height: 26px !important;
+  place-items: center !important;
+  padding: 0 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 8px !important;
+  background: rgba(7, 17, 31, 0.72) !important;
+  color: #B8C7DB !important;
+  line-height: 24px !important;
+  backdrop-filter: blur(10px);
+}
+
+.leaflet-popup.ooh-dispatch-popup .leaflet-popup-close-button:hover {
+  background: rgba(46, 127, 255, 0.18) !important;
+  color: #EEF3FA !important;
 }
 
 .custom-scrollbar {

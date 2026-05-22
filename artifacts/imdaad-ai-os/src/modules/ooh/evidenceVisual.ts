@@ -19,6 +19,10 @@ export function evidencePhotoSrc(item: OOHEvidenceItem, asset?: OOHAsset): strin
   return item.url || realEvidencePhotos[formatKey(asset)];
 }
 
+export function assetPreviewPhotoSrc(asset?: OOHAsset): string {
+  return realEvidencePhotos[formatKey(asset)];
+}
+
 export function evidencePhotoObjectPosition(asset?: OOHAsset): string {
   const key = formatKey(asset);
   if (key === 'billboard') return 'center 58%';
@@ -29,4 +33,8 @@ export function evidencePhotoObjectPosition(asset?: OOHAsset): string {
 export function evidencePhotoAlt(item: OOHEvidenceItem, asset?: OOHAsset): string {
   const category = item.photoCategory ? `${item.photoCategory.toLowerCase()} ` : '';
   return `Real ${category}photo evidence for ${asset?.name ?? item.label}`;
+}
+
+export function assetPreviewPhotoAlt(asset?: OOHAsset): string {
+  return `Real OOH asset preview for ${asset?.name ?? 'selected asset'}`;
 }

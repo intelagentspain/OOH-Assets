@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from 'react';
 import {
   AlertTriangle,
   BarChart3,
@@ -14,6 +14,7 @@ import {
   ExternalLink,
   FileCheck2,
   FileSearch,
+  FileText,
   Filter,
   Globe2,
   Image,
@@ -24,13 +25,15 @@ import {
   Plus,
   QrCode,
   Search,
+  Settings2,
   ShieldCheck,
   UploadCloud,
   Users,
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { CircleMarker, MapContainer, Polyline, Popup, TileLayer } from 'react-leaflet';
+import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet';
+import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
   createOOHAsset,
@@ -41,10 +44,10 @@ import {
   updateOOHAsset,
 } from './api';
 import { fallbackOOHBootstrap, oohSurveyQuestions } from './seedData';
-import { evidencePhotoAlt, evidencePhotoObjectPosition, evidencePhotoSrc } from './evidenceVisual';
+import { assetPreviewPhotoAlt, assetPreviewPhotoSrc, evidencePhotoAlt, evidencePhotoObjectPosition, evidencePhotoSrc } from './evidenceVisual';
 import type { OOHEvidenceItem, OOHAsset, OOHBootstrap, OOHReviewStatus, OOHSubmission } from './types';
 
-type OOHTab = 'Command' | 'Assets' | 'GIS' | 'Surveys' | 'Evidence' | 'Client Pages' | 'Reports';
+type OOHTab = 'Command' | 'Assets' | 'GIS' | 'Surveys' | 'Evidence' | 'Client Pages' | 'Work Orders' | 'Obligations' | 'Vendors' | 'Settings' | 'Reports';
 
 interface AssetForm {
   name: string;
@@ -57,6 +60,39 @@ interface AssetForm {
   lng: string;
   client: string;
   campaign: string;
+}
+
+type AssetIntakeMode = 'choice' | 'single' | 'bulk';
+
+interface BulkAssetPreview extends AssetForm {
+  rowNumber: number;
+}
+
+type CampaignWizardStep = 1 | 2 | 3;
+type CampaignAssignmentMode = 'Create installation work order' | 'Create proof survey only' | 'Campaign booking only';
+
+interface CampaignForm {
+  assetId: string;
+  campaign: string;
+  client: string;
+  buyerContact: string;
+  bookedFrom: string;
+  bookedTo: string;
+  artworkTitle: string;
+  artworkFile: string;
+  artworkSpec: string;
+  installOwner: string;
+  installationDueDate: string;
+  workOrderAssignment: CampaignAssignmentMode;
+  installSla: string;
+  proofSla: string;
+}
+
+interface CampaignArtworkUpload {
+  name: string;
+  type: string;
+  sizeLabel: string;
+  uploadedAt: string;
 }
 
 interface AssignmentForm {
@@ -76,12 +112,31 @@ const tabs: Array<{ id: OOHTab; label: string; icon: typeof BarChart3 }> = [
   { id: 'Surveys', label: 'Surveys', icon: ClipboardCheck },
   { id: 'Evidence', label: 'Evidence', icon: Camera },
   { id: 'Client Pages', label: 'Client Pages', icon: Globe2 },
+  { id: 'Work Orders', label: 'Work Orders', icon: FileSearch },
+  { id: 'Obligations', label: 'Obligations', icon: FileText },
+  { id: 'Vendors', label: 'Vendor IQ', icon: ShieldCheck },
+  { id: 'Settings', label: 'Settings', icon: Settings2 },
   { id: 'Reports', label: 'Reports', icon: FileCheck2 },
 ];
+
+const oohTabPaths: Record<OOHTab, string> = {
+  Command: '/ooh',
+  Assets: '/ooh/assets',
+  GIS: '/ooh/gis',
+  Surveys: '/ooh/surveys',
+  Evidence: '/ooh/evidence',
+  'Client Pages': '/ooh/client-pages',
+  'Work Orders': '/ooh/workorders',
+  Obligations: '/ooh/obligations',
+  Vendors: '/ooh/vendorintelligence',
+  Settings: '/ooh/settings',
+  Reports: '/ooh/reports',
+};
 
 const assetFormatOptions = ['Unipole billboard', 'Digital screen', 'Bridge banner', 'Bus shelter', 'Wall wrap', 'Street furniture'];
 const marketOptions = ['All markets', 'Dubai', 'Abu Dhabi', 'Sharjah'];
 const recurrenceOptions: AssignmentForm['recurrence'][] = ['One-time', 'Weekly', 'Monthly', 'Quarterly'];
+const defaultInstallationTeams = ['Falcon Field Team', 'Capital Survey Crew', 'Coastal QA Team', 'In-house Install Team', 'Certified Print Vendor'];
 const reportCards: Array<{ title: string; text: string; icon: LucideIcon }> = [
   { title: 'Campaign Evidence Pack', text: 'Client-ready proof, maps, survey scores and exception notes.', icon: FileCheck2 },
   { title: 'Permit Watchlist', text: 'Expiry windows, municipal owner, route and access requirements.', icon: ShieldCheck },
@@ -98,6 +153,13 @@ const integrationFeeds = [
   { name: 'Player / ad-server', source: 'DOOH uptime and playback readiness', status: 'Attention', at: '18 min ago' },
   { name: 'Document repository', source: 'Permits, NOCs and proof packs', status: 'Synced', at: '21 min ago' },
 ];
+
+const modernMapTiles = {
+  attribution: '&copy; OpenStreetMap &copy; CARTO',
+  url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+  subdomains: 'abcd',
+  maxZoom: 20,
+};
 
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric' }).format(new Date(value));
@@ -148,6 +210,267 @@ function markerColor(asset: OOHAsset): string {
   return '#34d399';
 }
 
+function escapeMapText(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function createOOHAssetMapIcon(asset: OOHAsset, selected = false) {
+  const color = markerColor(asset);
+  const width = selected ? 38 : 32;
+  const height = selected ? 46 : 40;
+  const viewBoxWidth = 38;
+  const viewBoxHeight = 46;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${viewBoxWidth} ${viewBoxHeight}">
+    <defs>
+      <filter id="assetPinShadow" x="-40%" y="-40%" width="180%" height="190%">
+        <feDropShadow dx="0" dy="8" stdDeviation="5" flood-color="#000000" flood-opacity="0.5"/>
+      </filter>
+    </defs>
+    <circle cx="19" cy="19" r="${selected ? 17 : 14}" fill="${color}" fill-opacity="${selected ? '0.2' : '0.1'}"/>
+    <path d="M19 43C14.2 35.7 8 28.9 8 19.8C8 13.4 12.9 8.2 19 8.2C25.1 8.2 30 13.4 30 19.8C30 28.9 23.8 35.7 19 43Z" fill="#081426" stroke="${color}" stroke-width="${selected ? 3 : 2.2}" filter="url(#assetPinShadow)"/>
+    <circle cx="19" cy="19.8" r="7.6" fill="${color}"/>
+    <circle cx="19" cy="19.8" r="3.2" fill="#F8FAFC" fill-opacity="0.92"/>
+    <circle cx="19" cy="19.8" r="13.4" fill="none" stroke="#F8FAFC" stroke-width="${selected ? 1.4 : 0}" stroke-opacity="${selected ? 0.8 : 0}"/>
+  </svg>`;
+  return L.divIcon({ html: svg, className: '', iconSize: [width, height], iconAnchor: [width / 2, height - 3], popupAnchor: [0, -height + 10] });
+}
+
+function createOOHTeamMapIcon(teamName: string, status: string, selected = false) {
+  const color = teamMarkerColor(status);
+  const label = teamName.replace('Field Team', 'Crew').replace('Survey Crew', 'Crew').replace('QA Team', 'QA');
+  const width = Math.min(174, Math.max(96, label.length * 8 + 42));
+  const height = selected ? 58 : 50;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+    <defs>
+      <filter id="teamShadow" x="-20%" y="-20%" width="140%" height="160%">
+        <feDropShadow dx="0" dy="8" stdDeviation="7" flood-color="#000000" flood-opacity="0.48"/>
+      </filter>
+    </defs>
+    <rect x="1.5" y="1.5" width="${width - 3}" height="32" rx="10" fill="#111D36" stroke="${color}" stroke-width="${selected ? 2.6 : 1.8}" filter="url(#teamShadow)"/>
+    <rect x="1.5" y="1.5" width="${width - 3}" height="32" rx="10" fill="${color}" fill-opacity="${selected ? '0.26' : '0.16'}"/>
+    <text x="15" y="21" text-anchor="middle" fill="${color}" font-size="10" font-weight="900" font-family="DM Sans, Inter, sans-serif">T</text>
+    <text x="${width / 2 + 7}" y="21" text-anchor="middle" fill="#EEF3FA" font-size="11" font-weight="800" font-family="DM Sans, Inter, sans-serif">${escapeMapText(label)}</text>
+    <polygon points="${width / 2 - 7},34 ${width / 2 + 7},34 ${width / 2},48" fill="${color}"/>
+    <circle cx="${width / 2}" cy="${selected ? 51 : 47}" r="${selected ? 12 : 9}" fill="${color}" fill-opacity="0.2" stroke="#F8FAFC" stroke-width="2"/>
+    <circle cx="${width / 2}" cy="${selected ? 51 : 47}" r="4" fill="${color}"/>
+  </svg>`;
+  return L.divIcon({ html: svg, className: '', iconSize: [width, height], iconAnchor: [width / 2, height - 2], popupAnchor: [0, -height + 14] });
+}
+
+function teamInitials(teamName: string): string {
+  return teamName
+    .split(' ')
+    .filter(word => !['Field', 'Survey', 'Team', 'Crew'].includes(word))
+    .map(word => word[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase() || 'FT';
+}
+
+function createMissionCrewIcon(teamName: string, status: string, selected = false) {
+  const color = teamMarkerColor(status);
+  const initials = escapeMapText(teamInitials(teamName));
+  const html = `
+    <div class="ooh-crew-marker ${selected ? 'is-selected' : ''}" style="--crew-color:${color}">
+      <div class="ooh-crew-bearing"></div>
+      <div class="ooh-crew-dot"><span>${initials}</span></div>
+    </div>
+  `;
+  return L.divIcon({ html, className: '', iconSize: [42, 42], iconAnchor: [18, 21], popupAnchor: [0, -30] });
+}
+
+function createMissionTargetIcon(asset: OOHAsset, selected = false) {
+  const color = markerColor(asset);
+  const html = `
+    <div class="ooh-target-marker ${selected ? 'is-selected' : ''}" style="--target-color:${color}">
+      <div class="ooh-target-ring"></div>
+      <div class="ooh-target-core"></div>
+    </div>
+  `;
+  return L.divIcon({ html, className: '', iconSize: [34, 34], iconAnchor: [17, 17], popupAnchor: [0, -18] });
+}
+
+function createMissionStartIcon(selected = false) {
+  const html = `
+    <div class="ooh-start-marker ${selected ? 'is-selected' : ''}">
+      <div class="ooh-start-core"></div>
+    </div>
+  `;
+  return L.divIcon({ html, className: '', iconSize: [28, 28], iconAnchor: [14, 14], popupAnchor: [0, -16] });
+}
+
+function routeDistanceKm(points: Array<[number, number]>): number {
+  return points.slice(1).reduce((sum, point, index) => {
+    const previous = points[index];
+    const latKm = (point[0] - previous[0]) * 111;
+    const lngKm = (point[1] - previous[1]) * 111 * Math.cos(((point[0] + previous[0]) / 2) * Math.PI / 180);
+    return sum + Math.sqrt(latKm * latKm + lngKm * lngKm);
+  }, 0);
+}
+
+function pointAlongRoute(points: Array<[number, number]>, progress: number): [number, number] {
+  if (points.length <= 1) return points[0] ?? [25.2048, 55.2708];
+  const distances = points.slice(1).map((point, index) => routeDistanceKm([points[index], point]));
+  const total = distances.reduce((sum, distance) => sum + distance, 0) || 1;
+  let target = total * Math.max(0, Math.min(0.98, progress));
+  for (let index = 0; index < distances.length; index += 1) {
+    const distance = distances[index];
+    if (target <= distance) {
+      const start = points[index];
+      const end = points[index + 1];
+      const ratio = distance ? target / distance : 0;
+      return [
+        start[0] + (end[0] - start[0]) * ratio,
+        start[1] + (end[1] - start[1]) * ratio,
+      ];
+    }
+    target -= distance;
+  }
+  return points[points.length - 1];
+}
+
+function routeMidpoint(points: Array<[number, number]>): [number, number] {
+  return pointAlongRoute(points, 0.5);
+}
+
+function missionRouteFor(teamName: string, start: [number, number], target?: OOHAsset): Array<[number, number]> {
+  if (!target) return [start];
+  const end: [number, number] = [target.lat, target.lng];
+
+  if (teamName.includes('Falcon')) {
+    return [
+      start,
+      [25.204779, 55.270786],
+      [25.202019, 55.27592],
+      [25.201256, 55.277539],
+      [25.202054, 55.278391],
+      [25.203253, 55.278699],
+      [25.205081, 55.278952],
+      [25.209445, 55.279513],
+      [25.210733, 55.280205],
+      [25.211618, 55.281463],
+      [25.212865, 55.283351],
+      [25.214338, 55.28437],
+      [25.214602, 55.284325],
+      [25.215844, 55.282186],
+      [25.216295, 55.281874],
+      [25.216678, 55.280903],
+      [25.21756, 55.280792],
+      [25.218248, 55.281271],
+      [25.218495, 55.281873],
+      end,
+    ];
+  }
+
+  if (teamName.includes('Capital')) {
+    return [
+      start,
+      [24.454012, 54.377103],
+      [24.453613, 54.376943],
+      [24.451673, 54.374536],
+      [24.450367, 54.372625],
+      [24.45131, 54.371469],
+      [24.453379, 54.369464],
+      [24.455113, 54.367943],
+      [24.455473, 54.367763],
+      [24.455671, 54.367274],
+      [24.458016, 54.364987],
+      [24.461532, 54.361642],
+      [24.462146, 54.361044],
+      [24.465877, 54.35747],
+      [24.467826, 54.355576],
+      [24.469851, 54.353634],
+      [24.473021, 54.350571],
+      [24.474352, 54.349293],
+      [24.475414, 54.348238],
+      [24.476216, 54.347473],
+      [24.476696, 54.347028],
+      [24.478048, 54.345712],
+      [24.477531, 54.345034],
+      [24.475793, 54.343907],
+      [24.473773, 54.341875],
+      end,
+    ];
+  }
+
+  if (teamName.includes('Coastal')) {
+    return [
+      start,
+      [25.204779, 55.270786],
+      [25.200227, 55.276636],
+      [25.199161, 55.276432],
+      [25.200063, 55.27699],
+      [25.202698, 55.274903],
+      [25.204888, 55.27258],
+      [25.206023, 55.271245],
+      [25.202971, 55.269107],
+      [25.183926, 55.252773],
+      [25.132883, 55.213561],
+      [25.118875, 55.195852],
+      [25.093647, 55.16267],
+      [25.090636, 55.158791],
+      [25.085981, 55.152918],
+      [25.086128, 55.150733],
+      [25.084479, 55.150194],
+      [25.082686, 55.148833],
+      [25.079532, 55.144905],
+      [25.08043, 55.140222],
+      [25.079712, 55.137925],
+      [25.0786, 55.136619],
+      end,
+    ];
+  }
+
+  const midLat = (start[0] + end[0]) / 2;
+  const midLng = (start[1] + end[1]) / 2;
+  return [start, [midLat + 0.002, midLng], [midLat, midLng - 0.002], end];
+}
+
+function missionStreetLabel(asset?: OOHAsset): string {
+  if (!asset) return 'Field route';
+  if (asset.route) return asset.route;
+  return asset.address.split(',')[0] || asset.market;
+}
+
+function missionEtaMinutes(distanceKm: number, progress: number, blockers: number): number {
+  const remaining = distanceKm * (1 - Math.max(0, Math.min(0.95, progress)));
+  return Math.max(3, Math.round(remaining * 5 + blockers * 3 + 4));
+}
+
+function MissionMapFocus({ center, zoom }: { center: [number, number]; zoom: number }) {
+  const map = useMap();
+  useEffect(() => {
+    map.setView(center, zoom, { animate: true });
+  }, [center[0], center[1], map, zoom]);
+  return null;
+}
+
+function MissionRoutePolyline({ positions, selected }: { positions: Array<[number, number]>; selected: boolean }) {
+  const [layer, setLayer] = useState<L.Polyline | null>(null);
+
+  useEffect(() => {
+    const element = layer?.getElement();
+    if (!element) return;
+    element.classList.toggle('ooh-route-primary', selected);
+    element.classList.toggle('ooh-route-muted', !selected);
+  }, [layer, selected]);
+
+  const routeColor = selected ? '#7EB8F7' : '#51657D';
+
+  return (
+    <Polyline
+      ref={setLayer}
+      positions={positions}
+      pathOptions={{
+        color: routeColor,
+        opacity: selected ? 0.84 : 0.24,
+        weight: selected ? 3 : 1.5,
+        dashArray: selected ? undefined : '3 10',
+      }}
+    />
+  );
+}
+
 function scoreTone(score: number): string {
   if (score >= 92) return 'text-emerald-200';
   if (score >= 80) return 'text-amber-100';
@@ -173,6 +496,235 @@ function buildNewAssetForm(): AssetForm {
   };
 }
 
+function isDigitalFormat(format: string): boolean {
+  return /digital|screen|led|player|totem|panel/i.test(format);
+}
+
+function assetPayloadFromForm(form: AssetForm, attributes: string[] = ['Registered through intake wizard', 'Awaiting first field survey']): Partial<OOHAsset> {
+  const digital = isDigitalFormat(form.format);
+  return {
+    ...form,
+    lat: Number(form.lat),
+    lng: Number(form.lng),
+    status: 'Install Due',
+    permitStatus: 'Pending',
+    installStatus: 'Scheduled',
+    evidenceStatus: 'Missing',
+    healthScore: 88,
+    owner: 'OOH Assets',
+    buyerContact: 'Client media buyer',
+    bookedFrom: new Date().toISOString(),
+    bookedTo: new Date(Date.now() + 30 * 86400000).toISOString(),
+    installSla: 'Install proof required before go-live',
+    proofSla: 'Awaiting first evidence review',
+    playerUptime: digital ? 99.1 : 100,
+    audienceReference: `${form.route} GIS point with field survey pending`,
+    illumination: digital ? 'Digital' : 'Front-lit',
+    powerStatus: digital ? 'Online' : 'Not Required',
+    playerStatus: digital ? 'Online' : 'Not Installed',
+    attributes,
+  };
+}
+
+function normaliseImportKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function parseCsvRows(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (char === '"' && quoted && next === '"') {
+      cell += '"';
+      index += 1;
+      continue;
+    }
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (char === ',' && !quoted) {
+      row.push(cell.trim());
+      cell = '';
+      continue;
+    }
+    if ((char === '\n' || char === '\r') && !quoted) {
+      if (char === '\r' && next === '\n') index += 1;
+      row.push(cell.trim());
+      if (row.some(value => value.length > 0)) rows.push(row);
+      row = [];
+      cell = '';
+      continue;
+    }
+    cell += char;
+  }
+
+  row.push(cell.trim());
+  if (row.some(value => value.length > 0)) rows.push(row);
+  return rows;
+}
+
+function valueFromImportedRow(row: Record<string, string>, aliases: string[], fallback: string): string {
+  for (const alias of aliases) {
+    const value = row[normaliseImportKey(alias)];
+    if (value) return value;
+  }
+  return fallback;
+}
+
+function parseBulkAssetCsv(text: string): BulkAssetPreview[] {
+  const rows = parseCsvRows(text);
+  if (rows.length < 2) return [];
+  const headers = rows[0].map(normaliseImportKey);
+
+  return rows.slice(1).map((cells, index): BulkAssetPreview => {
+    const row = headers.reduce<Record<string, string>>((accumulator, header, headerIndex) => {
+      accumulator[header] = cells[headerIndex]?.trim() ?? '';
+      return accumulator;
+    }, {});
+    const fallbackLat = 25.2048 + (index * 0.006);
+    const fallbackLng = 55.2708 + (index * 0.006);
+
+    return {
+      rowNumber: index + 2,
+      name: valueFromImportedRow(row, ['asset name', 'asset', 'name'], `Imported OOH Asset ${index + 1}`),
+      format: valueFromImportedRow(row, ['format', 'asset format', 'media format'], 'Digital screen'),
+      dimensions: valueFromImportedRow(row, ['dimensions', 'size'], '6m x 3m LED'),
+      market: valueFromImportedRow(row, ['market', 'city', 'emirate'], 'Dubai'),
+      route: valueFromImportedRow(row, ['route', 'road', 'corridor'], 'Route pending'),
+      address: valueFromImportedRow(row, ['address', 'location', 'site address'], 'Field verified address pending'),
+      lat: valueFromImportedRow(row, ['gps lat', 'latitude', 'lat'], fallbackLat.toFixed(4)),
+      lng: valueFromImportedRow(row, ['gps lng', 'longitude', 'lng', 'lon'], fallbackLng.toFixed(4)),
+      client: valueFromImportedRow(row, ['client', 'brand', 'advertiser'], 'Unassigned client'),
+      campaign: valueFromImportedRow(row, ['campaign', 'booking', 'work order'], 'Inventory reserve'),
+    };
+  }).filter(asset => asset.name.trim().length > 0);
+}
+
+function buildPreparedBulkAssets(): BulkAssetPreview[] {
+  return [
+    {
+      rowNumber: 1,
+      name: 'Marina Walk Digital Totem',
+      format: 'Street furniture',
+      dimensions: '1.8m x 1.2m digital panel',
+      market: 'Dubai',
+      route: 'Marina Walk',
+      address: 'Marina promenade, Dubai',
+      lat: '25.0807',
+      lng: '55.1408',
+      client: 'Harbour Retail',
+      campaign: 'Weekend Retail Push',
+    },
+    {
+      rowNumber: 2,
+      name: 'Yas Island Bridge Banner',
+      format: 'Bridge banner',
+      dimensions: '24m x 2.8m',
+      market: 'Abu Dhabi',
+      route: 'Yas access road',
+      address: 'Yas Island approach, Abu Dhabi',
+      lat: '24.4881',
+      lng: '54.6071',
+      client: 'Etihad Holidays',
+      campaign: 'Summer Stopover',
+    },
+    {
+      rowNumber: 3,
+      name: 'University City Bus Shelter',
+      format: 'Bus shelter',
+      dimensions: '4-sheet backlit',
+      market: 'Sharjah',
+      route: 'University City Road',
+      address: 'University City stop 4, Sharjah',
+      lat: '25.2862',
+      lng: '55.4635',
+      client: 'CityPay',
+      campaign: 'Tap and Go',
+    },
+  ];
+}
+
+function dateInputValue(value?: string, offsetDays = 0): string {
+  const fallback = new Date(Date.now() + offsetDays * 86400000).toISOString();
+  const parsed = value && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : fallback;
+  return parsed.slice(0, 10);
+}
+
+function dateOffsetInputValue(value: string | undefined, offsetDays: number, fallbackOffsetDays = 3): string {
+  const base = value && Number.isFinite(Date.parse(value)) ? Date.parse(value) : Date.now() + fallbackOffsetDays * 86400000;
+  return new Date(base + offsetDays * 86400000).toISOString().slice(0, 10);
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function fileTitle(value: string): string {
+  return value.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function assetAttributeValue(asset: OOHAsset, key: string): string | undefined {
+  const prefix = `${key}:`;
+  return asset.attributes.find(attribute => attribute.startsWith(prefix))?.slice(prefix.length).trim();
+}
+
+function mergeAssetAttributes(asset: OOHAsset, values: Record<string, string>): string[] {
+  const managedPrefixes = Object.keys(values).map(key => `${key}:`);
+  const preserved = asset.attributes.filter(attribute => !managedPrefixes.some(prefix => attribute.startsWith(prefix)));
+  const managed = Object.entries(values)
+    .filter(([, value]) => value.trim().length > 0)
+    .map(([key, value]) => `${key}: ${value.trim()}`);
+  return [...preserved, ...managed, 'Campaign commissioned through 4C360'];
+}
+
+function buildCampaignForm(asset?: OOHAsset): CampaignForm {
+  const fallback = asset ?? fallbackOOHBootstrap.assets[0];
+  if (!fallback) {
+    return {
+      assetId: '',
+      campaign: 'New Campaign Launch',
+      client: 'Client name',
+      buyerContact: 'Client media buyer',
+      bookedFrom: dateInputValue(undefined, 0),
+      bookedTo: dateInputValue(undefined, 30),
+      artworkTitle: 'Campaign creative',
+      artworkFile: 'ARTWORK_FILE.pdf',
+      artworkSpec: 'Asset dimensions and production spec',
+      installOwner: 'Falcon Field Team',
+      installationDueDate: dateInputValue(undefined, 3),
+      workOrderAssignment: 'Create installation work order',
+      installSla: 'Install proof required before go-live',
+      proofSla: 'Evidence due within 24h of installation',
+    };
+  }
+  const artwork = artworkForAsset(fallback);
+  return {
+    assetId: fallback?.id ?? '',
+    campaign: fallback?.campaign ?? 'New Campaign Launch',
+    client: fallback?.client ?? 'Client name',
+    buyerContact: fallback?.buyerContact ?? 'Client media buyer',
+    bookedFrom: dateInputValue(fallback?.bookedFrom, 0),
+    bookedTo: dateInputValue(fallback?.bookedTo, 30),
+    artworkTitle: assetAttributeValue(fallback, 'Artwork title') ?? artwork.title,
+    artworkFile: assetAttributeValue(fallback, 'Artwork file') ?? artwork.file,
+    artworkSpec: assetAttributeValue(fallback, 'Artwork spec') ?? artwork.spec,
+    installOwner: assetAttributeValue(fallback, 'Install owner') ?? 'Falcon Field Team',
+    installationDueDate: assetAttributeValue(fallback, 'Installation due') ?? dateOffsetInputValue(fallback.bookedFrom, -1, 3),
+    workOrderAssignment: (assetAttributeValue(fallback, 'Work order assignment') as CampaignAssignmentMode | undefined) ?? 'Create installation work order',
+    installSla: fallback?.installSla ?? 'Install proof required before go-live',
+    proofSla: fallback?.proofSla ?? 'Evidence due within 24h of installation',
+  };
+}
+
 function buildAssignmentForm(assetId: string): AssignmentForm {
   return {
     assetId,
@@ -183,6 +735,13 @@ function buildAssignmentForm(assetId: string): AssignmentForm {
     dueDate: new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10),
     reviewer: 'Maya Haddad',
   };
+}
+
+function getInitialOOHTab(): OOHTab {
+  const path = window.location.pathname;
+  const match = Object.entries(oohTabPaths).find(([, tabPath]) => tabPath !== '/ooh' && (path === tabPath || path.startsWith(`${tabPath}/`)));
+  if (match) return match[0] as OOHTab;
+  return 'Command';
 }
 
 type MetricTone = 'blue' | 'green' | 'amber' | 'red';
@@ -475,8 +1034,100 @@ function OOHSideNav({ activeTab, onChange }: { activeTab: OOHTab; onChange: (tab
   );
 }
 
-function Pill({ children, tone }: { children: string; tone?: string }) {
-  return <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-bold ${tone ?? statusTone(children)}`}>{children}</span>;
+function Pill({ children, tone, className = '' }: { children: string; tone?: string; className?: string }) {
+  return (
+    <span className={`inline-flex min-h-7 items-center justify-center whitespace-nowrap rounded-full border px-3.5 py-1.5 text-[11px] font-bold leading-none ${tone ?? statusTone(children)} ${className}`}>
+      {children}
+    </span>
+  );
+}
+
+const addNewClientValue = '__add_new_client__';
+
+function ClientSelectWithNew({
+  label,
+  value,
+  options,
+  onChange,
+  heightClass = 'h-10',
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+  heightClass?: string;
+}) {
+  const cleanOptions = Array.from(new Set(options.map(option => option.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const isExistingClient = cleanOptions.includes(value);
+  const selectValue = isExistingClient ? value : addNewClientValue;
+  const controlClass = `${heightClass} w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none`;
+
+  return (
+    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">
+      {label}
+      <select
+        className={`mt-1 ${controlClass}`}
+        value={selectValue}
+        onChange={event => onChange(event.target.value === addNewClientValue ? '' : event.target.value)}
+      >
+        {cleanOptions.map(client => <option key={client} value={client}>{client}</option>)}
+        <option value={addNewClientValue}>+ Add new client</option>
+      </select>
+      {!isExistingClient && (
+        <input
+          className={`mt-2 ${controlClass}`}
+          placeholder="Enter new client name"
+          value={value}
+          onChange={event => onChange(event.target.value)}
+        />
+      )}
+    </label>
+  );
+}
+
+function TeamSelectWithNew({
+  label,
+  value,
+  options,
+  onChange,
+  heightClass = 'h-11',
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+  heightClass?: string;
+}) {
+  const cleanOptions = Array.from(new Set(options.map(option => option.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const isExistingTeam = cleanOptions.includes(value);
+  const controlClass = `${heightClass} w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none`;
+
+  return (
+    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">
+      {label}
+      <div className="mt-1 flex flex-col gap-2 sm:flex-row">
+        <select className={controlClass} value={isExistingTeam ? value : ''} onChange={event => onChange(event.target.value)}>
+          <option value="" disabled>Select installation team</option>
+          {cleanOptions.map(team => <option key={team} value={team}>{team}</option>)}
+        </select>
+        <button
+          type="button"
+          className={`${heightClass} inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-[#2E7FFF]/35 bg-[#2E7FFF]/12 px-4 text-sm font-black normal-case tracking-normal text-white hover:bg-[#2E7FFF]/20`}
+          onClick={() => onChange('')}
+        >
+          <Plus size={15} /> Add new team
+        </button>
+      </div>
+      {!isExistingTeam && (
+        <input
+          className={`mt-2 ${controlClass}`}
+          placeholder="Enter new installation team"
+          value={value}
+          onChange={event => onChange(event.target.value)}
+        />
+      )}
+    </label>
+  );
 }
 
 function AssetVisual({ asset, compact = false }: { asset: OOHAsset; compact?: boolean }) {
@@ -534,6 +1185,90 @@ function EvidenceStat({ label, value, tone }: { label: string; value: string; to
   );
 }
 
+function AssetPopupVisual({ asset, className = 'h-[92px] w-full' }: { asset: OOHAsset; className?: string }) {
+  return (
+    <div className={`relative overflow-hidden bg-[#07111F] ${className}`}>
+      <img
+        src={assetPreviewPhotoSrc(asset)}
+        alt={assetPreviewPhotoAlt(asset)}
+        className="h-full w-full object-cover"
+        style={{ objectPosition: evidencePhotoObjectPosition(asset) }}
+      />
+      <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(7,17,31,0),rgba(7,17,31,0.10)_48%,rgba(7,17,31,0.48))]" />
+    </div>
+  );
+}
+
+function PopupStat({ label, value, tone }: { label: string; value: string; tone?: string }) {
+  return (
+    <div className="min-w-0 border-l border-white/10 px-3 py-2.5 first:border-l-0">
+      <p className="truncate text-[9px] font-black uppercase tracking-[0.14em] text-[#7A94B4]">{label}</p>
+      <p className={`mt-1 truncate text-[13px] font-black leading-5 ${tone ?? 'text-white'}`}>{value}</p>
+    </div>
+  );
+}
+
+function AssetMapPopupContent({
+  asset,
+  latestInspection,
+  onSelect,
+  contextLabel = 'OOH asset',
+}: {
+  asset: OOHAsset;
+  latestInspection?: OOHSubmission;
+  onSelect?: (assetId: string) => void;
+  contextLabel?: string;
+}) {
+  return (
+    <div className="w-[320px] max-w-[calc(100vw-56px)] overflow-hidden text-left">
+      <div className="grid grid-cols-[112px_minmax(0,1fr)] border-b border-white/10">
+        <AssetPopupVisual asset={asset} className="h-[116px] w-full" />
+
+        <div className="min-w-0 px-3 py-3 pr-11">
+          <p className="truncate text-[10px] font-black uppercase tracking-[0.16em] text-[#7A94B4]">{contextLabel}</p>
+          <button
+            type="button"
+            className="mt-1 block max-h-10 w-full overflow-hidden text-left text-[15px] font-black leading-5 text-[#EEF3FA] hover:text-white"
+            onClick={() => onSelect?.(asset.id)}
+          >
+            {asset.name}
+          </button>
+          <p className="mt-2 truncate text-[11px] text-[#9DB4D0]">{asset.id}</p>
+          <p className="mt-1 truncate text-[11px] text-[#B8C7DB]">{asset.route} - {asset.market}</p>
+        </div>
+      </div>
+
+      <div className="grid min-h-[56px] grid-cols-3 bg-[#07111F]">
+        <PopupStat label="Proof" value={asset.evidenceStatus} />
+        <PopupStat label="Permit" value={asset.permitStatus} tone={asset.permitStatus === 'Valid' ? 'text-emerald-100' : 'text-amber-100'} />
+        <PopupStat label="Health" value={`${asset.healthScore}`} tone={scoreTone(asset.healthScore)} />
+      </div>
+
+      <div className="border-t border-white/10 bg-[#0B172A] p-2.5">
+        {latestInspection ? (
+          <a
+            aria-label={`Open latest inspection report for ${asset.name}`}
+            className="flex h-8 items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] text-xs font-black !text-white hover:bg-[#4C91FF]"
+            href={`/ooh/report/${latestInspection.id}`}
+            onClick={event => event.stopPropagation()}
+            style={{ color: '#FFFFFF' }}
+          >
+            <FileSearch size={14} /> Latest Report <ExternalLink size={13} />
+          </a>
+        ) : (
+          <button
+            type="button"
+            className="flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 text-xs font-black text-[#D8E6F8] hover:bg-white/10"
+            onClick={() => onSelect?.(asset.id)}
+          >
+            Open Asset Details <ExternalLink size={13} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function EvidenceMediaPanel({ item, asset, submission }: { item: OOHEvidenceItem; asset?: OOHAsset; submission: OOHSubmission }) {
   const publishStatus = submission.clientPublishStatus ?? item.clientPublishStatus ?? 'Internal Only';
 
@@ -577,72 +1312,52 @@ function OOHMap({ assets, submissions, selectedAssetId, onSelect }: { assets: OO
     const selected = assets.find(asset => asset.id === selectedAssetId) ?? assets[0];
     return selected ? [selected.lat, selected.lng] : [25.2048, 55.2708];
   }, [assets, selectedAssetId]);
+  const readyAssets = assets.filter(asset => asset.evidenceStatus === 'Ready').length;
 
   return (
-    <div className="h-[420px] overflow-hidden rounded-lg border border-white/10 bg-[#07111F]">
-      <MapContainer center={center} zoom={9} scrollWheelZoom={false} className="h-full w-full">
-        <TileLayer
-          attribution='&copy; OpenStreetMap contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
+    <div className="relative h-[420px] overflow-hidden rounded-lg border border-white/10 bg-[#07111F]">
+      <MapContainer center={center} zoom={9} scrollWheelZoom={true} className="h-full w-full ooh-modern-map">
+        <TileLayer {...modernMapTiles} />
         {assets.map(asset => {
           const latestInspection = latestInspectionForAsset(asset.id, submissions);
           return (
-          <CircleMarker
+          <Marker
             key={asset.id}
-            center={[asset.lat, asset.lng]}
-            radius={asset.id === selectedAssetId ? 11 : 8}
-            pathOptions={{ color: markerColor(asset), fillColor: markerColor(asset), fillOpacity: asset.id === selectedAssetId ? 0.88 : 0.68, weight: 2 }}
+            position={[asset.lat, asset.lng]}
+            icon={createOOHAssetMapIcon(asset, asset.id === selectedAssetId)}
             eventHandlers={{ click: () => onSelect(asset.id) }}
           >
-            <Popup>
-              <div className="w-80 p-3 text-left">
-                <AssetVisual asset={asset} compact />
-                <button className="mt-3 block w-full text-left" onClick={() => onSelect(asset.id)}>
-                  <span className="block text-xs font-black uppercase tracking-wide text-[#7A94B4]">{asset.id}</span>
-                  <span className="mt-1 block text-sm font-black text-[#EEF3FA]">{asset.name}</span>
-                </button>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <Pill>{asset.status}</Pill>
-                  <Pill>{asset.evidenceStatus}</Pill>
-                  <Pill>{asset.permitStatus}</Pill>
-                </div>
-                <p className="mt-2 text-xs text-[#B8C7DB]">{asset.address}</p>
-                <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                  <div className="rounded border border-white/10 bg-[#07111F] p-2 text-[#B8C7DB]">
-                    Campaign <strong className="block text-white">{asset.campaign}</strong>
-                  </div>
-                  <div className="rounded border border-white/10 bg-[#07111F] p-2 text-[#B8C7DB]">
-                    Action <strong className="block text-white">{actionState(asset)}</strong>
-                  </div>
-                  <div className="rounded border border-white/10 bg-[#07111F] p-2 text-[#B8C7DB]">
-                    Health <strong className="block text-white">{asset.healthScore}%</strong>
-                  </div>
-                  <div className="rounded border border-white/10 bg-[#07111F] p-2 text-[#B8C7DB]">
-                    Uptime <strong className="block text-white">{asset.playerUptime ?? 100}%</strong>
-                  </div>
-                </div>
-                {latestInspection ? (
-                  <a
-                    aria-label={`Open latest inspection report for ${asset.name}`}
-                    className="mt-3 flex h-10 items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] text-xs font-black !text-white"
-                    href={`/ooh/report/${latestInspection.id}`}
-                    onClick={event => event.stopPropagation()}
-                    style={{ color: '#FFFFFF' }}
-                  >
-                    <FileSearch size={14} /> Latest Inspection Report <ExternalLink size={13} />
-                  </a>
-                ) : (
-                  <div className="mt-3 flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 text-xs font-bold text-[#9DB4D0]">
-                    <FileSearch size={14} /> No inspection report yet
-                  </div>
-                )}
-              </div>
+            <Popup className="ooh-asset-popup" maxWidth={320}>
+              <AssetMapPopupContent asset={asset} latestInspection={latestInspection} onSelect={onSelect} />
             </Popup>
-          </CircleMarker>
+          </Marker>
         );
         })}
       </MapContainer>
+      <div className="absolute left-16 top-4 z-[350] flex flex-col gap-2">
+        <div className="inline-flex items-center gap-2 rounded-full border border-[#2E7FFF]/35 bg-[#0A1628]/88 px-4 py-2 text-xs font-black text-white shadow-xl backdrop-blur">
+          <span className="h-2.5 w-2.5 rounded-full bg-emerald-300" /> OOH ASSETS - LIVE
+        </div>
+        <div className="rounded-full border border-[#2E7FFF]/28 bg-[#0A1628]/84 px-4 py-2 text-xs font-bold text-[#D8E6F8] shadow-lg backdrop-blur">
+          All markets
+        </div>
+      </div>
+      <button type="button" className="absolute right-4 top-4 z-[350] inline-flex items-center gap-2 rounded-full border border-[#2E7FFF]/35 bg-[#0A1628]/88 px-4 py-2 text-xs font-black text-white shadow-xl backdrop-blur">
+        <Layers3 size={14} className="text-[#8AB8FF]" /> Layers <span className="rounded-full bg-[#2E7FFF]/28 px-2 py-0.5 text-[#9BC5FF]">3</span>
+      </button>
+      <div className="absolute bottom-4 left-4 z-[350] grid max-w-[560px] grid-cols-2 gap-2 sm:grid-cols-4">
+        {[
+          ['Assets', String(assets.length)],
+          ['Proof ready', `${readyAssets}/${assets.length}`],
+          ['Markets', String(new Set(assets.map(asset => asset.market)).size)],
+          ['Reviews', String(submissions.filter(submission => submission.status === 'Pending Review').length)],
+        ].map(([label, value]) => (
+          <div key={label} className="min-w-[108px] rounded-lg border border-[#2E7FFF]/28 bg-[#0A1628]/88 px-3 py-2 text-center shadow-xl backdrop-blur">
+            <p className="text-lg font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{value}</p>
+            <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">{label}</p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -651,7 +1366,49 @@ function teamMarkerColor(status: string): string {
   if (status === 'Overdue' || status === 'Rejected') return '#f87171';
   if (status === 'Submitted') return '#fbbf24';
   if (status === 'In Progress') return '#38bdf8';
-  return '#a78bfa';
+  return '#7EB8F7';
+}
+
+interface DispatchOffice {
+  name: string;
+  address: string;
+  position: [number, number];
+}
+
+function dispatchOfficeFor(anchor: OOHAsset | undefined): DispatchOffice {
+  if (anchor?.market === 'Abu Dhabi') {
+    return {
+      name: 'OOH Assets Head Office - Abu Dhabi',
+      address: 'Al Danah operations desk, Abu Dhabi',
+      position: [24.4539, 54.3773],
+    };
+  }
+
+  if (anchor?.market === 'Sharjah') {
+    return {
+      name: 'OOH Assets Head Office - Northern Emirates',
+      address: 'Al Majaz operations desk, Sharjah',
+      position: [25.3272, 55.3898],
+    };
+  }
+
+  return {
+    name: 'OOH Assets Head Office - Dubai',
+    address: 'Business Bay dispatch desk, Dubai',
+    position: [25.2048, 55.2708],
+  };
+}
+
+function teamStagingPosition(assignment: OOHBootstrap['assignments'][number], anchor: OOHAsset | undefined, index: number): [number, number] {
+  void assignment;
+  void index;
+  return dispatchOfficeFor(anchor).position;
+}
+
+function missionDepartureLabel(assignment: OOHBootstrap['assignments'][number], index: number): string {
+  const departure = Number.isFinite(Date.parse(assignment.dueDate)) ? new Date(assignment.dueDate) : new Date();
+  departure.setHours(7 + Math.min(index, 3), index % 2 ? 45 : 20, 0, 0);
+  return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(departure);
 }
 
 function LiveOperationsGisPanel({
@@ -661,6 +1418,7 @@ function LiveOperationsGisPanel({
   selectedAssetId,
   onSelectAsset,
   onOpenGIS,
+  onOpenAssets,
   onOpenSurveys,
   onOpenEvidence,
 }: {
@@ -670,6 +1428,7 @@ function LiveOperationsGisPanel({
   selectedAssetId: string;
   onSelectAsset: (assetId: string) => void;
   onOpenGIS: () => void;
+  onOpenAssets: () => void;
   onOpenSurveys: () => void;
   onOpenEvidence: () => void;
 }) {
@@ -677,28 +1436,82 @@ function LiveOperationsGisPanel({
     const selected = assets.find(asset => asset.id === selectedAssetId) ?? assets[0];
     return selected ? [selected.lat, selected.lng] : [25.2048, 55.2708];
   }, [assets, selectedAssetId]);
+  const [teamMissionMapOpen, setTeamMissionMapOpen] = useState(false);
+  const [selectedTeamId, setSelectedTeamId] = useState('');
+  const [layerPanelOpen, setLayerPanelOpen] = useState(false);
+  const [mapLayers, setMapLayers] = useState({ assets: true, crews: true, routes: true, hotspots: true });
+  const [missionTick, setMissionTick] = useState(0);
   const now = Date.now();
   const activeAssignments = assignments.filter(assignment => ['Active', 'In Progress', 'Submitted', 'Overdue'].includes(assignment.status));
   const proofGapAssets = assets.filter(asset => asset.evidenceStatus !== 'Ready');
   const permitAttentionAssets = assets.filter(asset => ['Pending', 'Expiring', 'Expired'].includes(asset.permitStatus));
   const surveyDueAssets = assets.filter(asset => !Number.isFinite(Date.parse(asset.nextSurveyDue)) || Date.parse(asset.nextSurveyDue) <= now + 3 * 86400000);
   const reviewQueue = submissions.filter(submission => submission.status === 'Pending Review');
+  const readyAssets = assets.filter(asset => asset.evidenceStatus === 'Ready');
+  const avgHealth = Math.round(assets.reduce((sum, asset) => sum + asset.healthScore, 0) / Math.max(1, assets.length));
   const teamRows = activeAssignments.map((assignment, index) => {
     const targetAssets = assets.filter(asset => assignment.assetIds.includes(asset.id));
     const anchor = targetAssets[0] ?? assets[index % Math.max(1, assets.length)];
-    const direction = index % 2 === 0 ? 1 : -1;
-    const position: [number, number] = anchor
-      ? [anchor.lat + direction * (0.035 + index * 0.006), anchor.lng - direction * (0.028 + index * 0.004)]
-      : [25.2048, 55.2708];
+    const dispatchOffice = dispatchOfficeFor(anchor);
+    const position = teamStagingPosition(assignment, anchor, index);
     return {
       assignment,
       targetAssets,
       anchor,
+      dispatchOffice,
       position,
+      departureAt: missionDepartureLabel(assignment, index),
       blockers: targetAssets.filter(assetNeedsAction).length,
     };
   });
+  useEffect(() => {
+    if (!teamMissionMapOpen) return undefined;
+    const interval = window.setInterval(() => setMissionTick(current => current + 1), 1100);
+    return () => window.clearInterval(interval);
+  }, [teamMissionMapOpen]);
+
+  const missionRows = teamRows.map((row, index) => {
+    const route = missionRouteFor(row.assignment.team, row.position, row.anchor);
+    const baseProgress = Math.max(7, Math.min(92, row.assignment.progress || 10));
+    const liveProgress = ((baseProgress + missionTick * (0.48 + index * 0.16) + index * 11) % 94) / 100;
+    const movingPosition = pointAlongRoute(route, liveProgress);
+    const routeKm = routeDistanceKm(route);
+    const targetLabel = row.anchor ? missionStreetLabel(row.anchor) : 'Route target';
+    return {
+      ...row,
+      route,
+      liveProgress,
+      movingPosition,
+      routeKm,
+      etaMinutes: missionEtaMinutes(routeKm, liveProgress, row.blockers),
+      gpsAccuracy: row.assignment.status === 'Overdue' ? 11 : row.assignment.status === 'Submitted' ? 4 : 6 + index,
+      targetLabel,
+      currentStreet: row.anchor?.address.split(',')[0] ?? targetLabel,
+    };
+  });
+  const selectedTeamRow = missionRows.find(row => row.assignment.id === selectedTeamId) ?? missionRows[0];
+  const selectedMissionCenter = selectedTeamRow?.route ? routeMidpoint(selectedTeamRow.route) : center;
+  const openTeamMissionMap = () => {
+    if (!selectedTeamId && teamRows[0]) {
+      setSelectedTeamId(teamRows[0].assignment.id);
+    }
+    setTeamMissionMapOpen(true);
+  };
+  const toggleMapLayer = (key: keyof typeof mapLayers) => {
+    setMapLayers(current => ({ ...current, [key]: !current[key] }));
+  };
+  const activeLayerCount = Object.values(mapLayers).filter(Boolean).length;
   const actionAssets = assets.filter(assetNeedsAction).slice(0, 4);
+  const summaryCards = [
+    { label: 'Assets', value: String(assets.length), detail: 'Registered OOH units', action: onOpenAssets, actionLabel: 'Open asset register', icon: Building2, tone: 'blue' },
+    { label: 'Field Teams', value: String(teamRows.length), detail: 'Active survey crews', action: openTeamMissionMap, actionLabel: 'Open mission map', icon: Users, tone: 'violet' },
+    { label: 'Proof Gaps', value: String(proofGapAssets.length), detail: 'Need review or capture', action: proofGapAssets.length ? onOpenEvidence : onOpenGIS, actionLabel: proofGapAssets.length ? 'Review proof gaps' : 'Open GIS', icon: Camera, tone: 'red' },
+    { label: 'Permit Watch', value: String(permitAttentionAssets.length), detail: 'Needs compliance action', action: () => {
+      const target = permitAttentionAssets[0];
+      if (target) onSelectAsset(target.id);
+      onOpenAssets();
+    }, actionLabel: 'Review permits', icon: ShieldCheck, tone: 'amber' },
+  ];
 
   return (
     <section className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
@@ -714,43 +1527,72 @@ function LiveOperationsGisPanel({
         </div>
       </div>
 
-      <div className="mt-4 grid gap-4 xl:grid-cols-[1.25fr_0.75fr]">
-        <div className="relative h-[460px] overflow-hidden rounded-lg border border-blue-300/20 bg-[#07111F]">
-          <MapContainer center={center} zoom={9} scrollWheelZoom={false} className="h-full w-full">
-            <TileLayer
-              attribution='&copy; OpenStreetMap contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
-            {assets.map(asset => (
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {summaryCards.map(card => {
+          const CardIcon = card.icon;
+          const toneClass = {
+            blue: 'border-blue-300/20 bg-blue-400/10 text-blue-100',
+            violet: 'border-violet-300/20 bg-violet-400/10 text-violet-100',
+            red: 'border-red-300/20 bg-red-400/10 text-red-100',
+            amber: 'border-amber-300/20 bg-amber-300/10 text-amber-100',
+          }[card.tone];
+          return (
+            <button
+              key={card.label}
+              type="button"
+              className="group min-h-[132px] rounded-lg border border-white/10 bg-[#07111F] p-4 text-left transition hover:-translate-y-0.5 hover:border-[#7EB8F7]/55 hover:bg-[#102343] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7EB8F7]"
+              onClick={card.action}
+              aria-label={card.actionLabel}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className={`flex h-10 w-10 items-center justify-center rounded-lg border ${toneClass}`}>
+                  <CardIcon size={18} />
+                </div>
+                <ExternalLink size={14} className="text-[#7EB8F7] opacity-80 transition group-hover:opacity-100" />
+              </div>
+              <p className="mt-3 text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{card.label}</p>
+              <div className="mt-1 flex items-end justify-between gap-3">
+                <p className="text-3xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{card.value}</p>
+                <span className="text-[11px] font-black text-[#7EB8F7]">{card.actionLabel}</span>
+              </div>
+              <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{card.detail}</p>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_420px]">
+        <div className="relative h-[520px] overflow-hidden rounded-lg border border-blue-300/20 bg-[#07111F] xl:h-[560px]">
+          <MapContainer center={center} zoom={9} scrollWheelZoom={true} className="h-full w-full ooh-modern-map">
+            <TileLayer {...modernMapTiles} />
+            {mapLayers.hotspots && proofGapAssets.map(asset => (
               <CircleMarker
-                key={asset.id}
+                key={`hotspot-${asset.id}`}
                 center={[asset.lat, asset.lng]}
-                radius={asset.id === selectedAssetId ? 11 : 7}
-                pathOptions={{ color: markerColor(asset), fillColor: markerColor(asset), fillOpacity: asset.id === selectedAssetId ? 0.9 : 0.68, weight: asset.id === selectedAssetId ? 3 : 2 }}
+                radius={24}
+                pathOptions={{ color: markerColor(asset), fillColor: markerColor(asset), fillOpacity: 0.1, weight: 1.5, dashArray: '5 7' }}
+              />
+            ))}
+            {mapLayers.assets && assets.map(asset => (
+              <Marker
+                key={asset.id}
+                position={[asset.lat, asset.lng]}
+                icon={createOOHAssetMapIcon(asset, asset.id === selectedAssetId)}
                 eventHandlers={{ click: () => onSelectAsset(asset.id) }}
               >
-                <Popup>
-                  <div className="w-72 p-3 text-left">
-                    <span className="block text-xs font-black uppercase tracking-wide text-[#7A94B4]">{asset.id}</span>
-                    <strong className="mt-1 block text-sm text-[#EEF3FA]">{asset.name}</strong>
-                    <p className="mt-1 text-xs text-[#B8C7DB]">{asset.route} - {asset.market}</p>
-                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                      <div className="rounded border border-white/10 bg-[#07111F] p-2 text-[#B8C7DB]">Proof <strong className="block text-white">{asset.evidenceStatus}</strong></div>
-                      <div className="rounded border border-white/10 bg-[#07111F] p-2 text-[#B8C7DB]">Permit <strong className="block text-white">{asset.permitStatus}</strong></div>
-                    </div>
-                  </div>
+                <Popup className="ooh-asset-popup" maxWidth={320}>
+                  <AssetMapPopupContent asset={asset} onSelect={onSelectAsset} contextLabel="Network asset" />
                 </Popup>
-              </CircleMarker>
+              </Marker>
             ))}
-            {teamRows.map(row => row.anchor && (
-              <Polyline key={`${row.assignment.id}-route`} positions={[row.position, [row.anchor.lat, row.anchor.lng]]} pathOptions={{ color: teamMarkerColor(row.assignment.status), dashArray: '6 8', opacity: 0.75, weight: 2 }} />
+            {mapLayers.routes && missionRows.map(row => row.anchor && (
+              <Polyline key={`${row.assignment.id}-route`} positions={row.route} pathOptions={{ color: teamMarkerColor(row.assignment.status), dashArray: '6 8', opacity: 0.72, weight: 2.5 }} />
             ))}
-            {teamRows.map(row => (
-              <CircleMarker
+            {mapLayers.crews && missionRows.map(row => (
+              <Marker
                 key={row.assignment.id}
-                center={row.position}
-                radius={13}
-                pathOptions={{ color: '#F8FAFC', fillColor: teamMarkerColor(row.assignment.status), fillOpacity: 0.9, weight: 2 }}
+                position={row.movingPosition}
+                icon={createMissionCrewIcon(row.assignment.team, row.assignment.status)}
               >
                 <Popup>
                   <div className="w-72 p-3 text-left">
@@ -763,10 +1605,59 @@ function LiveOperationsGisPanel({
                     </div>
                   </div>
                 </Popup>
-              </CircleMarker>
+              </Marker>
             ))}
           </MapContainer>
-          <div className="absolute bottom-3 left-3 z-[500] flex flex-wrap gap-2 rounded-lg border border-white/10 bg-[#07111F]/88 p-2 text-[11px] font-bold text-[#B8C7DB] shadow-xl backdrop-blur">
+          <div className="absolute left-16 top-4 z-[350] flex flex-col gap-2">
+            <div className="inline-flex items-center gap-2 rounded-full border border-[#2E7FFF]/35 bg-[#0A1628]/88 px-4 py-2 text-xs font-black text-white shadow-xl backdrop-blur">
+              <span className="h-2.5 w-2.5 rounded-full bg-emerald-300" /> ALL OOH ASSETS - LIVE
+            </div>
+            <div className="rounded-full border border-[#2E7FFF]/28 bg-[#0A1628]/84 px-4 py-2 text-xs font-bold text-[#D8E6F8] shadow-lg backdrop-blur">
+              Market: All
+            </div>
+          </div>
+          <button type="button" className="absolute right-4 top-4 z-[350] inline-flex items-center gap-2 rounded-full border border-[#2E7FFF]/35 bg-[#0A1628]/88 px-4 py-2 text-xs font-black text-white shadow-xl backdrop-blur" onClick={() => setLayerPanelOpen(current => !current)}>
+            <Layers3 size={14} className="text-[#8AB8FF]" /> Layers <span className="rounded-full bg-[#2E7FFF]/28 px-2 py-0.5 text-[#9BC5FF]">{activeLayerCount}</span>
+          </button>
+          {layerPanelOpen && (
+            <div className="absolute right-4 top-16 z-[350] grid w-[230px] grid-cols-2 gap-2 rounded-lg border border-[#2E7FFF]/28 bg-[#06101E]/94 p-2 shadow-2xl shadow-black/40 backdrop-blur-xl">
+              {([
+                ['assets', 'Assets', '#38d399'],
+                ['crews', 'Crews', '#7EB8F7'],
+                ['routes', 'Routes', '#38bdf8'],
+                ['hotspots', 'Hotspots', '#f87171'],
+              ] as Array<[keyof typeof mapLayers, string, string]>).map(([key, label, color]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`flex min-h-[34px] items-center gap-2 rounded-lg border px-2 py-1.5 text-left text-[10px] font-black transition ${
+                    mapLayers[key]
+                      ? 'border-current bg-white/8 text-white'
+                      : 'border-white/10 bg-[#0A1628]/82 text-[#7A94B4] hover:text-white'
+                  }`}
+                  style={mapLayers[key] ? { color, borderColor: `${color}88` } : undefined}
+                  onClick={() => toggleMapLayer(key)}
+                >
+                  <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: color }} />
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="absolute bottom-4 left-4 z-[350] grid max-w-[640px] grid-cols-2 gap-2 sm:grid-cols-4">
+            {[
+              ['Assets', String(assets.length)],
+              ['Crews', String(teamRows.length)],
+              ['Proof ready', `${readyAssets.length}/${assets.length}`],
+              ['Health', `${avgHealth}%`],
+            ].map(([label, value]) => (
+              <div key={label} className="min-w-[116px] rounded-lg border border-[#2E7FFF]/28 bg-[#0A1628]/88 px-3 py-2 text-center shadow-xl backdrop-blur">
+                <p className="text-lg font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{value}</p>
+                <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">{label}</p>
+              </div>
+            ))}
+          </div>
+          <div className="absolute bottom-4 right-4 z-[350] flex max-w-[360px] flex-wrap gap-2 rounded-lg border border-white/10 bg-[#07111F]/88 p-2 text-[11px] font-bold text-[#B8C7DB] shadow-xl backdrop-blur">
             <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-emerald-300" />Ready assets</span>
             <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-amber-300" />Needs proof</span>
             <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-red-300" />Issue</span>
@@ -774,28 +1665,13 @@ function LiveOperationsGisPanel({
           </div>
         </div>
 
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-2">
-            {[
-              ['Assets', String(assets.length), 'Registered OOH units'],
-              ['Field Teams', String(teamRows.length), 'Active survey crews'],
-              ['Proof Gaps', String(proofGapAssets.length), 'Need review or capture'],
-              ['Permit Watch', String(permitAttentionAssets.length), 'Needs compliance action'],
-            ].map(([label, value, detail]) => (
-              <div key={label} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
-                <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
-                <p className="mt-1 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{value}</p>
-                <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{detail}</p>
-              </div>
-            ))}
-          </div>
-
-          <div className="rounded-lg border border-white/10 bg-[#07111F] p-3">
+        <div className="grid gap-3 xl:h-[560px] xl:grid-rows-[minmax(0,1fr)_auto]">
+          <div className="min-h-0 overflow-hidden rounded-lg border border-white/10 bg-[#07111F] p-3">
             <div className="flex items-center justify-between gap-2">
               <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#7A94B4]">Teams on field</p>
               <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-bold text-[#B8C7DB]">{surveyDueAssets.length} survey target{surveyDueAssets.length === 1 ? '' : 's'}</span>
             </div>
-            <div className="mt-3 space-y-2">
+            <div className="custom-scrollbar mt-3 h-[286px] space-y-2 overflow-y-auto pr-1 xl:h-[330px]">
               {teamRows.map(row => (
                 <button
                   key={row.assignment.id}
@@ -827,7 +1703,7 @@ function LiveOperationsGisPanel({
               <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#7A94B4]">Action hotspots</p>
               <button type="button" className="text-xs font-black text-[#7EB8F7]" onClick={reviewQueue.length ? onOpenEvidence : onOpenGIS}>{reviewQueue.length ? 'Review proof' : 'Open map'}</button>
             </div>
-            <div className="mt-3 space-y-2">
+            <div className="mt-3 grid gap-2">
               {actionAssets.map(asset => (
                 <button
                   key={asset.id}
@@ -849,92 +1725,2595 @@ function LiveOperationsGisPanel({
           </div>
         </div>
       </div>
+
+      {teamMissionMapOpen && (
+        <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" role="presentation" onClick={() => setTeamMissionMapOpen(false)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="field-team-mission-map-title"
+            className="max-h-[92vh] w-full max-w-[1480px] overflow-hidden rounded-lg border border-[#24476F] bg-[#081426] shadow-2xl shadow-black/50"
+            onClick={event => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 bg-[#0A1628]/95 p-5">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#7EB8F7]">Field operations control</p>
+                <h3 id="field-team-mission-map-title" className="mt-1 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Live crew dispatch and mission status</h3>
+                <p className="mt-1 max-w-4xl text-sm leading-6 text-[#9DB4D0]">Monitor field teams against assigned OOH assets, route progress, inspection blockers and the next action required from operations.</p>
+                <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                  <span className="inline-flex items-center gap-2 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 font-black text-emerald-100"><span className="h-2 w-2 rounded-full bg-emerald-300" />GPS stream active</span>
+                  <span className="rounded-full border border-blue-300/20 bg-blue-400/10 px-3 py-1 font-black text-blue-100">Street-level mission view</span>
+                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 font-bold text-[#B8C7DB]">{missionRows.length} active crew{missionRows.length === 1 ? '' : 's'}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                aria-label="Close field team mission map"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-[#B8C7DB] hover:bg-white/10 hover:text-white"
+                onClick={() => setTeamMissionMapOpen(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="border-b border-white/10 bg-[#07111F] px-5 py-3">
+              <div className="grid gap-2 md:grid-cols-3">
+                {missionRows.map(row => (
+                  <button
+                    key={`mission-strip-${row.assignment.id}`}
+                    type="button"
+                    className={`rounded-lg border px-3 py-2 text-left transition ${selectedTeamRow?.assignment.id === row.assignment.id ? 'border-[#7EB8F7] bg-[#102343]' : 'border-white/10 bg-[#0B172A] hover:border-[#7EB8F7]/45'}`}
+                    onClick={() => setSelectedTeamId(row.assignment.id)}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-black text-white">{row.assignment.team}</span>
+                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-[#B8C7DB]">{row.assignment.status}</span>
+                    </div>
+                    <p className="mt-1 truncate text-xs text-[#9DB4D0]">{row.anchor?.name ?? row.assignment.name}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid max-h-[calc(92vh-188px)] gap-4 overflow-y-auto p-4 xl:grid-cols-[minmax(0,1.45fr)_400px]">
+              <div className="relative h-[600px] overflow-hidden rounded-lg border border-[#24476F] bg-[#07111F]">
+                <MapContainer center={selectedMissionCenter} zoom={14} scrollWheelZoom={true} className="h-full w-full ooh-modern-map">
+                  <MissionMapFocus center={selectedMissionCenter} zoom={14} />
+                  <TileLayer {...modernMapTiles} />
+                  {missionRows.map(row => row.anchor && (
+                    <MissionRoutePolyline
+                      key={`${row.assignment.id}-mission-route`}
+                      positions={row.route}
+                      selected={selectedTeamRow?.assignment.id === row.assignment.id}
+                    />
+                  ))}
+                  {missionRows.map(row => (
+                    <Marker
+                      key={`mission-start-${row.assignment.id}`}
+                      position={row.route[0]}
+                      icon={createMissionStartIcon(selectedTeamRow?.assignment.id === row.assignment.id)}
+                      eventHandlers={{ click: () => setSelectedTeamId(row.assignment.id) }}
+                    >
+                      <Popup className="ooh-dispatch-popup" maxWidth={360}>
+                        <div className="w-[380px] overflow-hidden text-left">
+                          <div className="border-b border-white/10 bg-[#102343]/72 px-3 py-2 pr-10">
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-[10px] font-black uppercase tracking-[0.18em] text-[#7EB8F7]">Head office dispatch</span>
+                              <Pill>{row.assignment.status}</Pill>
+                            </div>
+                            <h4 className="mt-1.5 truncate text-sm font-black text-white">{row.dispatchOffice.name}</h4>
+                            <p className="mt-0.5 truncate text-[11px] text-[#9DB4D0]">{row.dispatchOffice.address}</p>
+                          </div>
+
+                          <div className="px-3 py-2.5">
+                            <div className="grid grid-cols-[92px_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-[11px] leading-4">
+                              <span className="font-black uppercase tracking-wide text-[#7A94B4]">Departure</span>
+                              <span className="font-black text-white">{row.departureAt}</span>
+                              <span className="font-black uppercase tracking-wide text-[#7A94B4]">ETA / Route</span>
+                              <span className="font-black text-white">{row.etaMinutes} min / {row.routeKm.toFixed(1)} km</span>
+                              <span className="font-black uppercase tracking-wide text-[#7A94B4]">Team</span>
+                              <span className="truncate font-bold text-[#DCE8F6]">{row.assignment.team}</span>
+                              <span className="font-black uppercase tracking-wide text-[#7A94B4]">Target</span>
+                              <span className="truncate font-bold text-[#DCE8F6]">{row.targetAssets.map(asset => asset.name).join(', ')}</span>
+                              <span className="font-black uppercase tracking-wide text-[#7A94B4]">Mission</span>
+                              <span className="truncate font-bold text-white">{row.assignment.name}</span>
+                              <span className="font-black uppercase tracking-wide text-[#7A94B4]">Next action</span>
+                              <span className="truncate font-black text-[#7EB8F7]">{row.blockers > 0 ? 'Track blocker clearance' : 'Monitor evidence sync'}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </Popup>
+                    </Marker>
+                  ))}
+                  {missionRows.flatMap(row => row.targetAssets.map(asset => ({ asset, assignmentId: row.assignment.id }))).map(({ asset, assignmentId }) => (
+                    <Marker
+                      key={`mission-asset-${asset.id}`}
+                      position={[asset.lat, asset.lng]}
+                      icon={createMissionTargetIcon(asset, selectedTeamRow?.assignment.id === assignmentId || selectedAssetId === asset.id)}
+                      eventHandlers={{ click: () => onSelectAsset(asset.id) }}
+                    >
+                      <Popup className="ooh-asset-popup" maxWidth={320}>
+                        <AssetMapPopupContent asset={asset} onSelect={onSelectAsset} contextLabel="Assigned asset" />
+                      </Popup>
+                    </Marker>
+                  ))}
+                  {missionRows.map(row => (
+                    <Marker
+                      key={`mission-team-${row.assignment.id}`}
+                      position={row.movingPosition}
+                      icon={createMissionCrewIcon(row.assignment.team, row.assignment.status, selectedTeamRow?.assignment.id === row.assignment.id)}
+                      eventHandlers={{ click: () => setSelectedTeamId(row.assignment.id) }}
+                    >
+                      <Popup>
+                        <div className="w-72 p-3 text-left">
+                          <span className="block text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">Live crew</span>
+                          <strong className="mt-1 block text-sm text-[#EEF3FA]">{row.assignment.team}</strong>
+                          <p className="mt-1 text-xs leading-5 text-[#B8C7DB]">{row.assignment.name}</p>
+                          <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                            <div className="rounded border border-white/10 bg-[#07111F] p-2 text-[#B8C7DB]">ETA <strong className="block text-white">{row.etaMinutes}m</strong></div>
+                            <div className="rounded border border-white/10 bg-[#07111F] p-2 text-[#B8C7DB]">GPS <strong className="block text-white">{row.gpsAccuracy}m</strong></div>
+                            <div className="rounded border border-white/10 bg-[#07111F] p-2 text-[#B8C7DB]">Route <strong className="block text-white">{Math.round(row.liveProgress * 100)}%</strong></div>
+                          </div>
+                        </div>
+                      </Popup>
+                    </Marker>
+                  ))}
+                </MapContainer>
+                <div className="absolute left-16 top-4 z-[350] w-[min(460px,calc(100%-128px))] rounded-lg border border-[#24476F] bg-[#081426]/92 p-3 shadow-xl backdrop-blur">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-[0.18em] text-[#7A94B4]">Mission corridor</p>
+                      <p className="mt-1 truncate text-sm font-black text-white">{selectedTeamRow ? selectedTeamRow.assignment.team : 'No active crew'}</p>
+                    </div>
+                    <span className="shrink-0 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-emerald-100">Live</span>
+                  </div>
+                  <p className="mt-2 truncate text-xs text-[#9DB4D0]">{selectedTeamRow ? `${selectedTeamRow.targetLabel} - ${selectedTeamRow.anchor?.name ?? 'Target asset'}` : 'Mission routing'}</p>
+                </div>
+                <div className="absolute right-4 top-4 z-[350] rounded-lg border border-[#24476F] bg-[#081426]/92 px-3 py-2 text-right shadow-xl backdrop-blur">
+                  <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">Last signal</p>
+                  <p className="text-xs font-black text-white">12 sec ago</p>
+                  <p className="mt-1 text-[10px] font-bold text-[#7EB8F7]">Zoom controls enabled</p>
+                </div>
+                <div className="absolute bottom-4 left-4 right-4 z-[350] grid gap-2 md:grid-cols-4">
+                  {[
+                    ['Selected crew', selectedTeamRow?.assignment.team ?? 'No crew'],
+                    ['ETA', selectedTeamRow ? `${selectedTeamRow.etaMinutes} min` : '--'],
+                    ['GPS accuracy', selectedTeamRow ? `+/- ${selectedTeamRow.gpsAccuracy}m` : '--'],
+                    ['Route progress', selectedTeamRow ? `${Math.round(selectedTeamRow.liveProgress * 100)}%` : '--'],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-lg border border-[#24476F] bg-[#081426]/92 px-3 py-2 shadow-xl backdrop-blur">
+                      <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
+                      <p className="mt-0.5 truncate text-sm font-black text-white">{value}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <aside className="custom-scrollbar max-h-[600px] space-y-3 overflow-y-auto pr-1">
+                {selectedTeamRow ? (
+                  <div className="rounded-lg border border-[#24476F] bg-[#07111F] p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Mission control</p>
+                        <h4 className="mt-1 text-xl font-black text-white">{selectedTeamRow.assignment.team}</h4>
+                        <p className="mt-1 text-sm leading-6 text-[#9DB4D0]">{selectedTeamRow.assignment.name}</p>
+                      </div>
+                      <Pill>{selectedTeamRow.assignment.status}</Pill>
+                    </div>
+                    <div className="mt-4 rounded-lg border border-[#24476F] bg-[#0B172A] p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">Current route segment</p>
+                          <p className="mt-1 text-base font-black text-white">{selectedTeamRow.currentStreet}</p>
+                          <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">Next stop: {selectedTeamRow.targetLabel}</p>
+                        </div>
+                        <div className="rounded-lg border border-blue-300/20 bg-blue-400/10 px-3 py-2 text-right">
+                          <p className="text-[10px] font-black uppercase tracking-wide text-blue-100">ETA</p>
+                          <p className="text-lg font-black text-white">{selectedTeamRow.etaMinutes}m</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      <div className="rounded-lg border border-white/10 bg-[#0B172A] p-3">
+                        <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">GPS</p>
+                        <p className="mt-1 text-base font-black text-white">+/- {selectedTeamRow.gpsAccuracy}m</p>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-[#0B172A] p-3">
+                        <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">Assets</p>
+                        <p className="mt-1 text-base font-black text-white">{selectedTeamRow.targetAssets.length}</p>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-[#0B172A] p-3">
+                        <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">Blockers</p>
+                        <p className="mt-1 text-base font-black text-white">{selectedTeamRow.blockers}</p>
+                      </div>
+                    </div>
+                    <div className="mt-4">
+                      <div className="flex items-center justify-between text-xs font-bold text-[#9DB4D0]">
+                        <span>Live route progress</span>
+                        <span>{Math.round(selectedTeamRow.liveProgress * 100)}%</span>
+                      </div>
+                      <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
+                        <div className="h-full rounded-full bg-[#7EB8F7]" style={{ width: `${Math.round(selectedTeamRow.liveProgress * 100)}%` }} />
+                      </div>
+                      <div className="mt-3 rounded-lg border border-amber-300/20 bg-amber-300/10 p-3">
+                        <p className="text-[10px] font-black uppercase tracking-wide text-amber-100">Operational issue</p>
+                        <p className="mt-1 text-xs leading-5 text-[#FDECC8]">{selectedTeamRow.blockers > 0 ? 'This mission has unresolved proof, permit or inspection blockers. Keep the route visible until the crew clears the target asset.' : 'No blockers on the selected route. Keep monitoring ETA and evidence sync.'}</p>
+                      </div>
+                    </div>
+                    <div className="mt-4 space-y-2">
+                      {selectedTeamRow.targetAssets.map(asset => (
+                        <button
+                          key={asset.id}
+                          type="button"
+                          className="flex w-full items-center justify-between gap-3 rounded-lg border border-white/10 bg-[#0B172A] px-3 py-2 text-left hover:border-[#7EB8F7]/45"
+                          onClick={() => onSelectAsset(asset.id)}
+                        >
+                          <span>
+                            <span className="block text-sm font-black text-white">{asset.name}</span>
+                            <span className="text-xs text-[#9DB4D0]">{asset.market} - {actionState(asset)} - {missionStreetLabel(asset)}</span>
+                          </span>
+                          <Pill>{asset.evidenceStatus}</Pill>
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-sm font-black text-white hover:bg-[#4C91FF]"
+                      onClick={() => {
+                        setTeamMissionMapOpen(false);
+                        onOpenSurveys();
+                      }}
+                    >
+                      Open Survey Assignment <ExternalLink size={14} />
+                    </button>
+                    {selectedTeamRow.anchor && (
+                      <button
+                        type="button"
+                        className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-[#2E7FFF]/30 bg-[#102343] px-3 py-2 text-sm font-black text-blue-100 hover:bg-[#17315A]"
+                        onClick={() => {
+                          onSelectAsset(selectedTeamRow.anchor.id);
+                          setTeamMissionMapOpen(false);
+                          onOpenGIS();
+                        }}
+                      >
+                        Open Target Asset <ExternalLink size={14} />
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-white/10 bg-[#07111F] p-4 text-sm text-[#9DB4D0]">No active team missions.</div>
+                )}
+
+                <div className="rounded-lg border border-[#24476F] bg-[#07111F] p-3">
+                  <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Active crews</p>
+                  <div className="mt-3 space-y-2">
+                    {missionRows.map(row => (
+                      <button
+                        key={`team-list-${row.assignment.id}`}
+                        type="button"
+                        className={`w-full rounded-lg border p-3 text-left transition ${selectedTeamRow?.assignment.id === row.assignment.id ? 'border-[#7EB8F7] bg-[#102343]' : 'border-white/10 bg-[#0B172A] hover:border-[#7EB8F7]/45'}`}
+                        onClick={() => setSelectedTeamId(row.assignment.id)}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="flex items-center gap-2 text-sm font-black text-white">
+                            <span className="h-2.5 w-2.5 rounded-full" style={{ background: teamMarkerColor(row.assignment.status), boxShadow: `0 0 14px ${teamMarkerColor(row.assignment.status)}AA` }} />
+                            {row.assignment.team}
+                          </span>
+                          <span className="text-xs font-bold text-[#7EB8F7]">{row.etaMinutes}m ETA</span>
+                        </div>
+                        <p className="mt-1 text-xs text-[#9DB4D0]">{row.targetAssets.map(asset => asset.name).join(', ')}</p>
+                        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+                          <div className="h-full rounded-full bg-[#7EB8F7]" style={{ width: `${Math.round(row.liveProgress * 100)}%` }} />
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
 
-function AssetProfile({ asset, onPatch, onAssignSurvey }: { asset: OOHAsset; onPatch: (updates: Partial<OOHAsset>) => void; onAssignSurvey: () => void }) {
-  const attributeRows = [
+type OOHVendorRisk = 'Preferred' | 'Watchlist' | 'Action Needed';
+type OOHVendorTrend = 'up' | 'steady' | 'down';
+type OOHVendorFilter = 'copilot' | 'all' | 'install' | 'survey' | 'compliance' | 'dooh' | 'watchlist';
+type OOHVendorAction = 'rfq' | 'compare' | 'background' | 'action';
+
+interface OOHVendorPartner {
+  id: string;
+  name: string;
+  category: string;
+  role: string;
+  owner: string;
+  markets: string[];
+  services: string[];
+  score: number;
+  risk: OOHVendorRisk;
+  trend: OOHVendorTrend;
+  evidenceAcceptance: number;
+  fieldCompletion: number;
+  proofSla: number;
+  permitReadiness: number;
+  complianceDocs: number;
+  activeScopes: number;
+  linkedAssetIds: string[];
+  blockers: string[];
+  strengths: string[];
+  lastSync: string;
+  nextAction: string;
+}
+
+function deriveVendorRisk(score: number, blockers: string[]): OOHVendorRisk {
+  if (score >= 90 && blockers.length === 0) return 'Preferred';
+  if (score < 78 || blockers.length > 1) return 'Action Needed';
+  return 'Watchlist';
+}
+
+function buildPartner(
+  partner: Omit<OOHVendorPartner, 'score' | 'risk'>,
+): OOHVendorPartner {
+  const score = Math.round(
+    partner.evidenceAcceptance * 0.28
+    + partner.fieldCompletion * 0.24
+    + partner.proofSla * 0.18
+    + partner.permitReadiness * 0.16
+    + partner.complianceDocs * 0.14,
+  );
+  return { ...partner, score, risk: deriveVendorRisk(score, partner.blockers) };
+}
+
+function buildOOHVendorPartners(assets: OOHAsset[], assignments: OOHBootstrap['assignments'], submissions: OOHSubmission[]): OOHVendorPartner[] {
+  const assignmentAssets = (assignmentId: string) => {
+    const assignment = assignments.find(item => item.id === assignmentId);
+    return assignment ? assignment.assetIds : [];
+  };
+  const submittedAssetIds = new Set(submissions.map(submission => submission.assetId));
+  const proofBlockedAssets = assets.filter(asset => asset.evidenceStatus === 'Rejected' || asset.evidenceStatus === 'Missing');
+  const permitAttentionAssets = assets.filter(asset => ['Pending', 'Expiring', 'Expired'].includes(asset.permitStatus));
+  const digitalAssets = assets.filter(asset => asset.format.toLowerCase().includes('digital') || asset.playerStatus !== 'Not Installed');
+
+  return [
+    buildPartner({
+      id: 'ooh-vendor-falcon',
+      name: 'Falcon Field Team',
+      category: 'Installation evidence',
+      role: 'In-house proof and posting inspection crew',
+      owner: 'Maya Haddad',
+      markets: ['Dubai'],
+      services: ['QR verification', 'GPS lock', 'Photo evidence', 'Client proof packs'],
+      evidenceAcceptance: 92,
+      fieldCompletion: assignments.find(item => item.team === 'Falcon Field Team')?.progress ?? 88,
+      proofSla: 94,
+      permitReadiness: 96,
+      complianceDocs: 100,
+      activeScopes: assignments.filter(item => item.team === 'Falcon Field Team').length,
+      linkedAssetIds: assignmentAssets('ASG-OOH-1001'),
+      blockers: submittedAssetIds.has('OOH-DXB-MALL-014') ? ['Dubai Mall digital screen has one pending proof angle'] : [],
+      strengths: ['Fast QR/GPS capture', 'Strong reviewer handoff', 'Reliable proof metadata'],
+      lastSync: '4 min ago',
+      nextAction: 'Clear the pending close-up photo requirement and publish only approved proof.',
+      trend: 'up',
+    }),
+    buildPartner({
+      id: 'ooh-vendor-capital',
+      name: 'Capital Survey Crew',
+      category: 'Permit and readiness surveys',
+      role: 'Abu Dhabi field survey partner',
+      owner: 'Omar Nasser',
+      markets: ['Abu Dhabi'],
+      services: ['Permit readiness', 'Install condition checks', 'Route access notes'],
+      evidenceAcceptance: 78,
+      fieldCompletion: assignments.find(item => item.team === 'Capital Survey Crew')?.progress ?? 0,
+      proofSla: 72,
+      permitReadiness: 68,
+      complianceDocs: 88,
+      activeScopes: assignments.filter(item => item.team === 'Capital Survey Crew').length,
+      linkedAssetIds: assignmentAssets('ASG-OOH-1002'),
+      blockers: ['Corniche bridge banner proof is missing', 'Permit expiry needs follow-up'],
+      strengths: ['Local route access knowledge', 'Strong permit document handling'],
+      lastSync: '12 min ago',
+      nextAction: 'Confirm access window, capture missing proof, and attach permit follow-up before client sharing.',
+      trend: 'steady',
+    }),
+    buildPartner({
+      id: 'ooh-vendor-coastal',
+      name: 'Coastal QA Team',
+      category: 'Large-format rework',
+      role: 'Wall wrap and vinyl inspection specialist',
+      owner: 'Rana Saleh',
+      markets: ['Dubai'],
+      services: ['Vinyl condition review', 'Angle photos', 'Rework verification', 'Signature capture'],
+      evidenceAcceptance: 62,
+      fieldCompletion: assignments.find(item => item.team === 'Coastal QA Team')?.progress ?? 25,
+      proofSla: 66,
+      permitReadiness: 74,
+      complianceDocs: 82,
+      activeScopes: assignments.filter(item => item.team === 'Coastal QA Team').length,
+      linkedAssetIds: assignmentAssets('ASG-OOH-1003'),
+      blockers: ['JBR wall wrap proof was rejected', 'Re-inspection is overdue'],
+      strengths: ['Large-format install experience', 'Good exception detail when submitted'],
+      lastSync: '18 min ago',
+      nextAction: 'Send a rework checklist with required wide, close-up and angle photos.',
+      trend: 'down',
+    }),
+    buildPartner({
+      id: 'ooh-vendor-permitpath',
+      name: 'PermitPath Services',
+      category: 'Permit and NOC management',
+      role: 'Authority document and expiry control partner',
+      owner: 'Leila Mansour',
+      markets: ['Dubai', 'Abu Dhabi', 'Sharjah'],
+      services: ['Permit expiry tracking', 'NOC pack readiness', 'Municipality submission support'],
+      evidenceAcceptance: 84,
+      fieldCompletion: 86,
+      proofSla: 80,
+      permitReadiness: Math.max(58, 100 - permitAttentionAssets.length * 14),
+      complianceDocs: 92,
+      activeScopes: permitAttentionAssets.length,
+      linkedAssetIds: permitAttentionAssets.map(asset => asset.id),
+      blockers: permitAttentionAssets.map(asset => `${asset.name} permit is ${asset.permitStatus.toLowerCase()}`).slice(0, 3),
+      strengths: ['Clear expiry register', 'Good document traceability'],
+      lastSync: '21 min ago',
+      nextAction: 'Resolve pending and expiring permits before assigning new installation activity.',
+      trend: permitAttentionAssets.length > 1 ? 'down' : 'steady',
+    }),
+    buildPartner({
+      id: 'ooh-vendor-lumiplay',
+      name: 'LumiPlay Technical',
+      category: 'DOOH player support',
+      role: 'Digital screen power, player and uptime support',
+      owner: 'Nabil Farouq',
+      markets: ['Dubai'],
+      services: ['Player uptime checks', 'Power status', 'Playback readiness', 'Remote diagnostics'],
+      evidenceAcceptance: 95,
+      fieldCompletion: 93,
+      proofSla: 91,
+      permitReadiness: 96,
+      complianceDocs: 94,
+      activeScopes: digitalAssets.length,
+      linkedAssetIds: digitalAssets.map(asset => asset.id),
+      blockers: digitalAssets.filter(asset => asset.playerStatus === 'Offline' || asset.powerStatus === 'Offline').map(asset => `${asset.name} player or power attention`),
+      strengths: ['Strong uptime reporting', 'Fast technical triage', 'Clear player metadata'],
+      lastSync: '8 min ago',
+      nextAction: 'Keep daily player readiness checks attached to active DOOH campaign assets.',
+      trend: 'up',
+    }),
+    buildPartner({
+      id: 'ooh-vendor-urbanfabric',
+      name: 'UrbanFabric Installers',
+      category: 'Street furniture installs',
+      role: 'Bus shelter, totem and street furniture field partner',
+      owner: 'Samir Patel',
+      markets: ['Dubai', 'Sharjah'],
+      services: ['Shelter install checks', 'Furniture condition', 'Night illumination', 'Safety inspection'],
+      evidenceAcceptance: 88,
+      fieldCompletion: 90,
+      proofSla: 86,
+      permitReadiness: 90,
+      complianceDocs: 89,
+      activeScopes: assets.filter(asset => asset.format.toLowerCase().includes('shelter') || asset.format.toLowerCase().includes('furniture')).length,
+      linkedAssetIds: assets.filter(asset => asset.format.toLowerCase().includes('shelter') || asset.format.toLowerCase().includes('furniture')).map(asset => asset.id),
+      blockers: proofBlockedAssets.filter(asset => asset.format.toLowerCase().includes('shelter') || asset.format.toLowerCase().includes('furniture')).map(asset => `${asset.name} proof requires attention`),
+      strengths: ['Good street furniture coverage', 'Consistent safety evidence'],
+      lastSync: '16 min ago',
+      nextAction: 'Maintain recurring shelter and totem inspections with photo evidence by question.',
+      trend: 'steady',
+    }),
+  ];
+}
+
+function vendorRiskTone(risk: OOHVendorRisk): string {
+  if (risk === 'Preferred') return 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200';
+  if (risk === 'Action Needed') return 'border-red-400/25 bg-red-400/10 text-red-200';
+  return 'border-amber-300/25 bg-amber-300/10 text-amber-100';
+}
+
+function vendorTrendLabel(trend: OOHVendorTrend): string {
+  if (trend === 'up') return 'Improving';
+  if (trend === 'down') return 'Needs attention';
+  return 'Stable';
+}
+
+function OOHVendorIntelligence({
+  data,
+  onOpenAssets,
+  onOpenSurveys,
+  onOpenEvidence,
+  onOpenGIS,
+  onSelectAsset,
+}: {
+  data: OOHBootstrap;
+  onOpenAssets: () => void;
+  onOpenSurveys: () => void;
+  onOpenEvidence: () => void;
+  onOpenGIS: () => void;
+  onSelectAsset: (assetId: string) => void;
+}) {
+  const partners = useMemo(() => buildOOHVendorPartners(data.assets, data.assignments, data.submissions), [data.assets, data.assignments, data.submissions]);
+  const [filter, setFilter] = useState<OOHVendorFilter>('copilot');
+  const [selectedPartnerId, setSelectedPartnerId] = useState(partners[0]?.id ?? '');
+  const [activeAction, setActiveAction] = useState<OOHVendorAction>('action');
+  const selectedPartner = partners.find(partner => partner.id === selectedPartnerId) ?? partners.find(partner => partner.risk === 'Action Needed') ?? partners[0];
+  const filteredPartners = partners.filter(partner => {
+    if (filter === 'all' || filter === 'copilot') return true;
+    if (filter === 'install') return partner.category.toLowerCase().includes('install') || partner.category.toLowerCase().includes('format');
+    if (filter === 'survey') return partner.category.toLowerCase().includes('survey') || partner.services.some(service => service.toLowerCase().includes('photo'));
+    if (filter === 'compliance') return partner.category.toLowerCase().includes('permit') || partner.permitReadiness < 80;
+    if (filter === 'dooh') return partner.category.toLowerCase().includes('dooh');
+    return partner.risk !== 'Preferred';
+  });
+  const summary = {
+    preferred: partners.filter(partner => partner.risk === 'Preferred').length,
+    watchlist: partners.filter(partner => partner.risk === 'Watchlist').length,
+    actionNeeded: partners.filter(partner => partner.risk === 'Action Needed').length,
+    activeScopes: partners.reduce((sum, partner) => sum + partner.activeScopes, 0),
+  };
+  const actionLabels: Record<OOHVendorAction, { title: string; helper: string; icon: LucideIcon; button: string }> = {
+    rfq: { title: 'Write OOH partner scope', helper: 'Installation, survey, permit, evidence and service-level rules.', icon: FileCheck2, button: 'Prepare RFQ scope' },
+    compare: { title: 'Compare partner responses', helper: 'Rank vendors by SLA, evidence quality, coverage, compliance and capacity.', icon: BarChart3, button: 'Open response comparison' },
+    background: { title: 'Run partner background check', helper: 'Verify licenses, insurance, permit history, references and evidence discipline.', icon: FileSearch, button: 'Open compliance register' },
+    action: { title: 'Create recovery action pack', helper: 'Turn blockers into clear owner, field, evidence and approval actions.', icon: BrainCircuit, button: 'Open work queue' },
+  };
+  const actionConfig = actionLabels[activeAction];
+  const actionLines: Record<OOHVendorAction, string[]> = {
+    rfq: [
+      `Scope target: ${selectedPartner?.category ?? 'OOH partner services'}.`,
+      'Require QR verification, GPS accuracy, per-question photo evidence and reviewer-ready submission metadata.',
+      'Ask for market coverage, escalation route, crew capacity, insurance, permits/NOC support and sample evidence pack.',
+    ],
+    compare: [
+      `Compare ${selectedPartner?.name ?? 'partners'} against SLA, completion rate, evidence acceptance and compliance readiness.`,
+      'Flag missing proof categories, unclear access windows and weak client-publish controls before award.',
+      'Shortlist partners that can cover the selected markets without proof gaps.',
+    ],
+    background: [
+      'Check trade license, insurance, safety method statements, municipality/NOC experience and named supervisor.',
+      `Confirm current documents for ${selectedPartner?.markets.join(', ') ?? 'all markets'}.`,
+      'Block field assignment when required evidence or permit ownership is unclear.',
+    ],
+    action: [
+      selectedPartner?.nextAction ?? 'Open the partner work queue and clear blockers.',
+      'Link partner actions to assets, survey assignments, proof review and client evidence publishing.',
+      'Keep rejected, missing or stale evidence out of the client page until approved.',
+    ],
+  };
+  const [activityLog, setActivityLog] = useState<string[]>(['Partner copilot is ready for OOH vendor control.']);
+  const runAction = (action: OOHVendorAction) => {
+    setActiveAction(action);
+    const label = actionLabels[action].title;
+    setActivityLog(current => [`${label} prepared for ${selectedPartner?.name ?? 'selected partner'}`, ...current.slice(0, 3)]);
+  };
+  const openActionTarget = () => {
+    if (activeAction === 'rfq' || activeAction === 'compare') onOpenSurveys();
+    if (activeAction === 'background') onOpenAssets();
+    if (activeAction === 'action') onOpenEvidence();
+  };
+
+  if (!selectedPartner) return null;
+
+  return (
+    <section className="space-y-5">
+      <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#7EB8F7]">OOH vendor intelligence</p>
+            <h2 className="mt-1 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Partner control for installs, surveys, permits and DOOH support</h2>
+            <p className="mt-2 max-w-4xl text-sm leading-6 text-[#B8C7DB]">Adapted from the Vendor Intelligence module for OOH operations: monitor partner readiness, evidence quality, compliance documents, field delivery and action blockers without leaving the asset command center.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold text-white hover:bg-white/10" onClick={onOpenSurveys}>
+              <ClipboardCheck size={16} /> Assign Partner
+            </button>
+            <button type="button" className="inline-flex items-center gap-2 rounded-lg bg-[#E11D2E] px-3 py-2 text-sm font-bold text-white hover:bg-[#ff3445]" onClick={() => runAction('rfq')}>
+              <FileCheck2 size={16} /> Partner Scope
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {[
+            ['Preferred', String(summary.preferred), 'Ready for repeat assignment', 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200'],
+            ['Watchlist', String(summary.watchlist), 'Needs closer supervision', 'border-amber-300/25 bg-amber-300/10 text-amber-100'],
+            ['Action Needed', String(summary.actionNeeded), 'Has blockers before client proof', 'border-red-400/25 bg-red-400/10 text-red-200'],
+            ['Active Scopes', String(summary.activeScopes), 'Linked assets, permits and surveys', 'border-blue-300/20 bg-blue-300/10 text-blue-100'],
+          ].map(([label, value, helper, tone]) => (
+            <div key={label} className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+              <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
+              <p className="mt-2 text-3xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{value}</p>
+              <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{helper}</p>
+              <div className={`mt-3 h-1 rounded-full border ${tone}`} />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex gap-1 overflow-x-auto rounded-lg border border-white/10 bg-[#0B172A] p-2">
+        {[
+          ['copilot', 'Partner Copilot'],
+          ['all', 'All Partners'],
+          ['install', 'Install Teams'],
+          ['survey', 'Survey Vendors'],
+          ['compliance', 'Permit / Compliance'],
+          ['dooh', 'DOOH Support'],
+          ['watchlist', 'Watchlist'],
+        ].map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className={`shrink-0 rounded-lg px-3 py-2 text-xs font-black transition ${filter === id ? 'bg-[#2E7FFF] text-white' : 'text-[#9DB4D0] hover:bg-white/5 hover:text-white'}`}
+            onClick={() => setFilter(id as OOHVendorFilter)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {filter === 'copilot' && (
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_420px]">
+          <div className="rounded-lg border border-[#2E7FFF]/30 bg-[linear-gradient(135deg,rgba(17,32,64,0.98),rgba(7,17,31,0.98))] p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="inline-flex items-center gap-2 rounded-full border border-[#2E7FFF]/30 bg-[#2E7FFF]/12 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-[#8DBDFF]">
+                  <BrainCircuit size={13} /> Partner Copilot
+                </p>
+                <h3 className="mt-3 text-xl font-black text-white">Source, compare, check and recover OOH partners from one workbench</h3>
+                <p className="mt-2 text-sm leading-6 text-[#9DB4D0]">Current action target is <span className="font-black text-white">{selectedPartner.name}</span>. Switch partner by clicking any vendor card below.</p>
+              </div>
+              <Pill tone={vendorRiskTone(selectedPartner.risk)}>{selectedPartner.risk}</Pill>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-4">
+              {Object.entries(actionLabels).map(([id, action]) => {
+                const Icon = action.icon;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`rounded-lg border p-3 text-left transition hover:border-[#7EB8F7]/60 ${activeAction === id ? 'border-[#2E7FFF] bg-[#102343]' : 'border-white/10 bg-[#07111F]'}`}
+                    onClick={() => runAction(id as OOHVendorAction)}
+                  >
+                    <Icon size={18} className="text-[#7EB8F7]" />
+                    <p className="mt-3 text-sm font-black text-white">{action.title}</p>
+                    <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{action.helper}</p>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-4 rounded-lg border border-white/10 bg-[#07111F] p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Generated workbench</p>
+                  <h4 className="mt-1 text-lg font-black text-white">{actionConfig.title}</h4>
+                  <p className="mt-1 text-sm text-[#9DB4D0]">{actionConfig.helper}</p>
+                </div>
+                <button type="button" className="inline-flex items-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={openActionTarget}>
+                  {actionConfig.button} <ExternalLink size={14} />
+                </button>
+              </div>
+              <div className="mt-4 grid gap-2">
+                {actionLines[activeAction].map(line => (
+                  <div key={line} className="flex gap-2 rounded-lg border border-white/10 bg-[#0B172A] p-3 text-sm leading-6 text-[#D8E6F8]">
+                    <CheckCircle2 size={16} className="mt-1 shrink-0 text-emerald-200" />
+                    <span>{line}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <aside className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
+            <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Copilot activity</p>
+            <div className="mt-3 space-y-2">
+              {activityLog.map(item => (
+                <div key={item} className="rounded-lg border border-white/10 bg-[#07111F] p-3 text-sm leading-6 text-[#B8C7DB]">{item}</div>
+              ))}
+            </div>
+            <div className="mt-4 rounded-lg border border-blue-300/20 bg-blue-300/10 p-3">
+              <p className="text-sm font-black text-white">Why this matters for OOH</p>
+              <p className="mt-2 text-xs leading-5 text-blue-100">Partner performance directly controls proof quality, permit confidence, field survey freshness and what can safely be published to client evidence pages.</p>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_390px]">
+        <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h3 className="text-xl font-black text-white">OOH Partner Register</h3>
+              <p className="mt-1 text-sm text-[#9DB4D0]">Click a partner to inspect score signals, blockers and linked assets.</p>
+            </div>
+            <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">{`${filteredPartners.length} partners`}</Pill>
+          </div>
+          <div className="mt-4 grid gap-3">
+            {filteredPartners.map(partner => (
+              <button
+                key={partner.id}
+                type="button"
+                className={`rounded-lg border p-4 text-left transition hover:border-[#7EB8F7]/60 ${selectedPartner.id === partner.id ? 'border-[#2E7FFF] bg-[#102343]' : 'border-white/10 bg-[#07111F]'}`}
+                onClick={() => setSelectedPartnerId(partner.id)}
+              >
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h4 className="text-lg font-black text-white">{partner.name}</h4>
+                      <Pill tone={vendorRiskTone(partner.risk)}>{partner.risk}</Pill>
+                    </div>
+                    <p className="mt-1 text-sm text-[#9DB4D0]">{partner.category} - {partner.role}</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {partner.markets.map(market => <span key={market} className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs font-bold text-[#B8C7DB]">{market}</span>)}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-center sm:min-w-[330px]">
+                    <div className="rounded-lg border border-white/10 bg-[#0B172A] p-2">
+                      <p className={`text-xl font-black ${scoreTone(partner.score)}`}>{partner.score}</p>
+                      <p className="text-[10px] uppercase tracking-wide text-[#7A94B4]">Score</p>
+                    </div>
+                    <div className="rounded-lg border border-white/10 bg-[#0B172A] p-2">
+                      <p className="text-xl font-black text-white">{partner.evidenceAcceptance}%</p>
+                      <p className="text-[10px] uppercase tracking-wide text-[#7A94B4]">Proof OK</p>
+                    </div>
+                    <div className="rounded-lg border border-white/10 bg-[#0B172A] p-2">
+                      <p className="text-xl font-black text-white">{partner.fieldCompletion}%</p>
+                      <p className="text-[10px] uppercase tracking-wide text-[#7A94B4]">Field</p>
+                    </div>
+                  </div>
+                </div>
+                {partner.blockers.length > 0 && (
+                  <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-400/20 bg-red-400/10 p-3 text-sm leading-6 text-red-100">
+                    <AlertTriangle size={16} className="mt-1 shrink-0" />
+                    <span>{partner.blockers[0]}</span>
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <aside className="space-y-4">
+          <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Selected partner</p>
+                <h3 className="mt-1 text-xl font-black text-white">{selectedPartner.name}</h3>
+                <p className="mt-1 text-sm leading-6 text-[#9DB4D0]">{selectedPartner.owner} - {vendorTrendLabel(selectedPartner.trend)}</p>
+              </div>
+              <div className={`rounded-lg bg-white/5 px-3 py-2 text-center ${scoreTone(selectedPartner.score)}`}>
+                <div className="text-3xl font-black">{selectedPartner.score}</div>
+                <div className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Score</div>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-2">
+              {[
+                ['Evidence acceptance', `${selectedPartner.evidenceAcceptance}%`],
+                ['Field completion', `${selectedPartner.fieldCompletion}%`],
+                ['Proof SLA', `${selectedPartner.proofSla}%`],
+                ['Permit readiness', `${selectedPartner.permitReadiness}%`],
+                ['Compliance docs', `${selectedPartner.complianceDocs}%`],
+                ['Last sync', selectedPartner.lastSync],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
+                  <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
+                  <p className="mt-1 text-sm font-black text-white">{value}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
+            <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Linked OOH assets</p>
+            <div className="mt-3 space-y-2">
+              {selectedPartner.linkedAssetIds.length > 0 ? selectedPartner.linkedAssetIds.map(assetId => {
+                const asset = data.assets.find(item => item.id === assetId);
+                return (
+                  <button
+                    key={assetId}
+                    type="button"
+                    className="flex w-full items-center justify-between gap-3 rounded-lg border border-white/10 bg-[#07111F] p-3 text-left hover:border-[#7EB8F7]/45"
+                    onClick={() => {
+                      onSelectAsset(assetId);
+                      onOpenAssets();
+                    }}
+                  >
+                    <span>
+                      <span className="block text-sm font-black text-white">{asset?.name ?? assetId}</span>
+                      <span className="text-xs text-[#9DB4D0]">{asset ? `${asset.market} - ${actionState(asset)}` : 'Asset register'}</span>
+                    </span>
+                    <ExternalLink size={14} className="text-[#7EB8F7]" />
+                  </button>
+                );
+              }) : (
+                <p className="rounded-lg border border-white/10 bg-[#07111F] p-3 text-sm text-[#9DB4D0]">No asset links yet.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
+            <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Actionable solution</p>
+            <p className="mt-2 text-sm leading-6 text-white">{selectedPartner.nextAction}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" className="rounded-lg bg-[#2E7FFF] px-3 py-2 text-xs font-black text-white hover:bg-[#4C91FF]" onClick={onOpenSurveys}>Assign Survey</button>
+              <button type="button" className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-black text-white hover:bg-white/10" onClick={onOpenEvidence}>Review Proof</button>
+              <button type="button" className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-black text-white hover:bg-white/10" onClick={onOpenGIS}>Open GIS</button>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+type OOHWorkOrderStatus = 'Live' | 'Commissioned' | 'Install Scheduled' | 'Proof Review' | 'Rework' | 'Future Booking';
+type OOHWorkOrderFilter = 'all' | 'active' | 'install' | 'proof' | 'rework' | 'expiring' | 'future';
+
+interface OOHCampaignWorkOrder {
+  id: string;
+  asset: OOHAsset;
+  status: OOHWorkOrderStatus;
+  client: string;
+  campaign: string;
+  buyer: string;
+  flightLabel: string;
+  durationDays: number;
+  expiryLabel: string;
+  daysToExpiry: number;
+  artworkTitle: string;
+  artworkFile: string;
+  artworkSpec: string;
+  artworkState: string;
+  installedBy: string;
+  installOwner: string;
+  installationDueDate: string;
+  workOrderAssignment: string;
+  linkedAssignment?: OOHBootstrap['assignments'][number];
+  latestSubmission?: OOHSubmission;
+  futureBookings: string[];
+  nextAction: string;
+}
+
+function workOrderFileSlug(value: string): string {
+  return value.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').toUpperCase();
+}
+
+function campaignDurationDays(asset: OOHAsset): number {
+  if (!asset.bookedFrom || !asset.bookedTo) return 0;
+  const start = Date.parse(asset.bookedFrom);
+  const end = Date.parse(asset.bookedTo);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
+  return Math.max(1, Math.ceil((end - start) / 86400000) + 1);
+}
+
+function daysUntil(value?: string): number {
+  if (!value) return 0;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.ceil((parsed - Date.now()) / 86400000);
+}
+
+function futureWindow(startOffset: number, duration: number): string {
+  const start = new Date(Date.now() + startOffset * 86400000).toISOString();
+  const end = new Date(Date.now() + (startOffset + duration) * 86400000).toISOString();
+  return `${formatDate(start)} to ${formatDate(end)}`;
+}
+
+function futureBookingsForAsset(asset: OOHAsset): string[] {
+  const byAsset: Record<string, string[]> = {
+    'OOH-DXB-SZR-001': [
+      `Automotive launch hold - ${futureWindow(32, 28)}`,
+      `Telecom route takeover option - ${futureWindow(74, 26)}`,
+    ],
+    'OOH-DXB-MALL-014': [
+      `Retail opening loop - ${futureWindow(35, 21)}`,
+      `Luxury watch display option - ${futureWindow(66, 14)}`,
+    ],
+    'OOH-AUH-COR-022': [
+      `Airport stopover extension - ${futureWindow(39, 24)}`,
+      `National route pack - ${futureWindow(96, 18)}`,
+    ],
+    'OOH-SHJ-BUS-033': [
+      `Bank card refresh - ${futureWindow(18, 30)}`,
+    ],
+    'OOH-DXB-JBR-047': [
+      `Summer retail rebooking - ${futureWindow(31, 28)}`,
+      `Hospitality takeover option - ${futureWindow(71, 20)}`,
+    ],
+    'OOH-DXB-MET-061': [
+      `Clinic awareness extension - ${futureWindow(24, 28)}`,
+      `Transit retail slot - ${futureWindow(58, 21)}`,
+    ],
+  };
+  return byAsset[asset.id] ?? [`Next available campaign window - ${futureWindow(30, 21)}`];
+}
+
+function artworkForAsset(asset: OOHAsset): { title: string; file: string; spec: string; state: string } {
+  const slug = workOrderFileSlug(asset.campaign);
+  const format = asset.format.toLowerCase();
+  const isDigital = format.includes('digital') || asset.playerStatus === 'Online';
+  const file = assetAttributeValue(asset, 'Artwork file') ?? (isDigital
+    ? `DOOH_${slug}_${workOrderFileSlug(asset.dimensions)}_LOOP_V3.mp4`
+    : `${workOrderFileSlug(asset.format)}_${slug}_${workOrderFileSlug(asset.dimensions)}_PRINT_V4.pdf`);
+  let state = assetAttributeValue(asset, 'Artwork state') ?? 'Artwork matched to booking';
+  if (asset.evidenceStatus === 'Missing') state = 'Artwork ready, proof missing';
+  if (asset.evidenceStatus === 'Pending') state = 'Artwork installed, proof in review';
+  if (asset.evidenceStatus === 'Rejected') state = 'Artwork or proof requires rework';
+  return {
+    title: assetAttributeValue(asset, 'Artwork title') ?? `${asset.campaign} campaign creative`,
+    file,
+    spec: assetAttributeValue(asset, 'Artwork spec') ?? (isDigital ? `${asset.dimensions} - DOOH playback asset` : `${asset.dimensions} - print-ready production file`),
+    state,
+  };
+}
+
+function workOrderStatusForAsset(asset: OOHAsset): OOHWorkOrderStatus {
+  if (asset.evidenceStatus === 'Rejected' || asset.installStatus === 'Needs Visit') return 'Rework';
+  if (asset.bookedFrom && Date.parse(asset.bookedFrom) > Date.now()) return 'Future Booking';
+  if (asset.installStatus === 'Scheduled' || asset.status === 'Install Due') return 'Install Scheduled';
+  if (asset.evidenceStatus === 'Pending') return 'Proof Review';
+  if (asset.evidenceStatus === 'Ready' && asset.installStatus === 'Installed') return 'Live';
+  return 'Commissioned';
+}
+
+function workOrderStatusTone(status: OOHWorkOrderStatus): string {
+  if (status === 'Live') return 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200';
+  if (status === 'Rework') return 'border-red-400/25 bg-red-400/10 text-red-200';
+  if (status === 'Proof Review' || status === 'Install Scheduled') return 'border-amber-300/25 bg-amber-300/10 text-amber-100';
+  return 'border-blue-300/20 bg-blue-300/10 text-blue-100';
+}
+
+function nextWorkOrderAction(asset: OOHAsset, status: OOHWorkOrderStatus): string {
+  if (status === 'Rework') return 'Dispatch rework crew, recapture the failed evidence angle, then return to proof review.';
+  if (status === 'Proof Review') return 'Review the pending survey submission and publish only approved proof to the client page.';
+  if (status === 'Install Scheduled') return 'Confirm access, permit readiness, install owner and first proof capture before campaign go-live.';
+  if (asset.permitStatus !== 'Valid') return 'Resolve permit status before publishing the asset into a client evidence pack.';
+  if (status === 'Future Booking') return 'Hold the location, confirm artwork specifications and schedule pre-install survey.';
+  return 'Keep recurring survey and client evidence page current until campaign expiry.';
+}
+
+function buildOOHWorkOrders(data: OOHBootstrap): OOHCampaignWorkOrder[] {
+  return data.assets.map(asset => {
+    const linkedAssignment = data.assignments.find(assignment => assignment.assetIds.includes(asset.id));
+    const latestSubmission = latestInspectionForAsset(asset.id, data.submissions);
+    const artwork = artworkForAsset(asset);
+    const status = workOrderStatusForAsset(asset);
+    const campaignInstallOwner = assetAttributeValue(asset, 'Install owner');
+    const installationDueDate = assetAttributeValue(asset, 'Installation due') ?? dateOffsetInputValue(asset.bookedFrom, -1, 3);
+    const installedBy = asset.installStatus === 'Installed'
+      ? (asset.evidence[0]?.capturedBy ?? latestSubmission?.submittedBy ?? linkedAssignment?.team ?? 'Installation team')
+      : (linkedAssignment?.team ?? campaignInstallOwner ?? 'Installation not assigned');
+    return {
+      id: `WO-${asset.id.replace(/^OOH-/, '')}`,
+      asset,
+      status,
+      client: asset.client,
+      campaign: asset.campaign,
+      buyer: asset.buyerContact ?? 'Client contact pending',
+      flightLabel: assetFlight(asset),
+      durationDays: campaignDurationDays(asset),
+      expiryLabel: asset.bookedTo ? `Campaign ends ${formatDate(asset.bookedTo)}` : `Permit expires ${formatDate(asset.permitExpiry)}`,
+      daysToExpiry: daysUntil(asset.bookedTo ?? asset.permitExpiry),
+      artworkTitle: artwork.title,
+      artworkFile: artwork.file,
+      artworkSpec: artwork.spec,
+      artworkState: artwork.state,
+      installedBy,
+      installOwner: linkedAssignment ? `${linkedAssignment.team} - ${linkedAssignment.vendor}` : asset.installStatus === 'Installed' ? installedBy : campaignInstallOwner ?? 'Pending vendor assignment',
+      installationDueDate,
+      workOrderAssignment: assetAttributeValue(asset, 'Work order assignment') ?? (linkedAssignment ? 'Field assignment created' : 'Not assigned'),
+      linkedAssignment,
+      latestSubmission,
+      futureBookings: futureBookingsForAsset(asset),
+      nextAction: nextWorkOrderAction(asset, status),
+    };
+  }).sort((a, b) => {
+    const priority = (status: OOHWorkOrderStatus) => {
+      if (status === 'Rework') return 0;
+      if (status === 'Proof Review') return 1;
+      if (status === 'Install Scheduled') return 2;
+      if (status === 'Future Booking') return 4;
+      return 3;
+    };
+    return priority(a.status) - priority(b.status) || a.daysToExpiry - b.daysToExpiry;
+  });
+}
+
+function OOHWorkOrders({
+  data,
+  selectedAssetId,
+  onSelectAsset,
+  onOpenAssets,
+  onOpenSurveys,
+  onOpenEvidence,
+  onOpenClientPages,
+}: {
+  data: OOHBootstrap;
+  selectedAssetId: string;
+  onSelectAsset: (assetId: string) => void;
+  onOpenAssets: () => void;
+  onOpenSurveys: () => void;
+  onOpenEvidence: () => void;
+  onOpenClientPages: () => void;
+}) {
+  const workOrders = useMemo(() => buildOOHWorkOrders(data), [data]);
+  const [selectedOrderId, setSelectedOrderId] = useState('');
+  const [filter, setFilter] = useState<OOHWorkOrderFilter>('all');
+  const [search, setSearch] = useState('');
+  const selectedOrder = workOrders.find(order => order.id === selectedOrderId) ?? workOrders.find(order => order.asset.id === selectedAssetId) ?? workOrders[0];
+  useEffect(() => {
+    const focusedOrder = workOrders.find(order => order.asset.id === selectedAssetId);
+    if (focusedOrder) setSelectedOrderId(focusedOrder.id);
+  }, [selectedAssetId, workOrders]);
+  const activeOrders = workOrders.filter(order => order.status !== 'Future Booking' && order.daysToExpiry >= 0);
+  const proofActionOrders = workOrders.filter(order => order.asset.evidenceStatus !== 'Ready');
+  const installOrders = workOrders.filter(order => order.status === 'Install Scheduled');
+  const expiringOrders = workOrders.filter(order => order.daysToExpiry >= 0 && order.daysToExpiry <= 14);
+  const futureCount = workOrders.reduce((sum, order) => sum + order.futureBookings.length, 0);
+  const filteredOrders = workOrders.filter(order => {
+    const haystack = `${order.id} ${order.campaign} ${order.client} ${order.asset.name} ${order.asset.market} ${order.artworkFile} ${order.installedBy}`.toLowerCase();
+    const matchesSearch = haystack.includes(search.toLowerCase());
+    if (!matchesSearch) return false;
+    if (filter === 'active') return activeOrders.some(item => item.id === order.id);
+    if (filter === 'install') return order.status === 'Install Scheduled';
+    if (filter === 'proof') return order.asset.evidenceStatus !== 'Ready';
+    if (filter === 'rework') return order.status === 'Rework';
+    if (filter === 'expiring') return order.daysToExpiry >= 0 && order.daysToExpiry <= 14;
+    if (filter === 'future') return order.status === 'Future Booking' || order.futureBookings.length > 0;
+    return true;
+  });
+  const filters: Array<{ id: OOHWorkOrderFilter; label: string }> = [
+    { id: 'all', label: 'All' },
+    { id: 'active', label: 'Active' },
+    { id: 'install', label: 'Install' },
+    { id: 'proof', label: 'Proof action' },
+    { id: 'rework', label: 'Rework' },
+    { id: 'expiring', label: 'Expiring' },
+    { id: 'future', label: 'Future bookings' },
+  ];
+  const openSelectedAsset = () => {
+    if (!selectedOrder) return;
+    onSelectAsset(selectedOrder.asset.id);
+    onOpenAssets();
+  };
+  const assignSelectedSurvey = () => {
+    if (!selectedOrder) return;
+    onSelectAsset(selectedOrder.asset.id);
+    onOpenSurveys();
+  };
+  const reviewSelectedProof = () => {
+    if (!selectedOrder) return;
+    onSelectAsset(selectedOrder.asset.id);
+    onOpenEvidence();
+  };
+
+  if (!selectedOrder) return null;
+
+  return (
+    <section className="space-y-5">
+      <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#7EB8F7]">OOH campaign operations</p>
+            <h2 className="mt-1 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Campaign Work Orders</h2>
+            <p className="mt-2 max-w-4xl text-sm leading-6 text-[#B8C7DB]">Client-commissioned campaigns with asset location, artwork used, installation owner, proof status, expiry and next booking visibility.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-black text-white hover:bg-white/10" onClick={assignSelectedSurvey}>
+              <ClipboardCheck size={16} /> Assign Survey
+            </button>
+            <button type="button" className="inline-flex items-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={reviewSelectedProof}>
+              <Camera size={16} /> Review Proof
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          {[
+            ['Active Orders', String(activeOrders.length), 'Campaigns currently controlled by operations', 'active'],
+            ['Install Queue', String(installOrders.length), 'Assets due for install or first proof', 'install'],
+            ['Proof Action', String(proofActionOrders.length), 'Missing, pending or rejected proof', 'proof'],
+            ['Expiring Soon', String(expiringOrders.length), 'Campaigns ending inside 14 days', 'expiring'],
+            ['Future Slots', String(futureCount), 'Known next bookings or option holds', 'future'],
+          ].map(([label, value, helper, targetFilter]) => (
+            <button
+              key={label}
+              type="button"
+              className={`rounded-lg border p-4 text-left transition hover:border-[#7EB8F7]/50 ${filter === targetFilter ? 'border-[#2E7FFF] bg-[#102343]' : 'border-white/10 bg-[#07111F]'}`}
+              onClick={() => setFilter(targetFilter as OOHWorkOrderFilter)}
+            >
+              <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
+              <p className="mt-2 text-3xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{value}</p>
+              <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{helper}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1.35fr)_430px]">
+        <div className="min-w-0 rounded-lg border border-white/10 bg-[#0B172A] p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h3 className="text-xl font-black text-white">Commissioned campaign register</h3>
+              <p className="mt-1 text-sm text-[#9DB4D0]">Click any row to inspect artwork, installation and future booking details.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <label className="flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm text-[#9DB4D0]">
+                <Search size={15} />
+                <input className="w-52 bg-transparent text-white outline-none placeholder:text-[#58708E]" placeholder="Search work orders" value={search} onChange={event => setSearch(event.target.value)} />
+              </label>
+              <select className="h-10 rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm font-bold text-white outline-none" value={filter} onChange={event => setFilter(event.target.value as OOHWorkOrderFilter)}>
+                {filters.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="mt-3 flex gap-1 overflow-x-auto rounded-lg border border-white/10 bg-[#07111F] p-1.5">
+            {filters.map(item => (
+              <button
+                key={item.id}
+                type="button"
+                className={`shrink-0 rounded-md px-3 py-2 text-xs font-black transition ${filter === item.id ? 'bg-[#2E7FFF] text-white' : 'text-[#9DB4D0] hover:bg-white/5 hover:text-white'}`}
+                onClick={() => setFilter(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="custom-scrollbar mt-4 w-full max-w-full overflow-x-auto rounded-lg border border-white/10">
+            <table className="w-full min-w-[1220px] border-collapse text-left text-sm">
+              <thead className="bg-[#07111F] text-[10px] uppercase tracking-wide text-[#7A94B4]">
+                <tr>
+                  <th className="px-3 py-3">Campaign / Client</th>
+                  <th className="px-3 py-3">Asset</th>
+                  <th className="px-3 py-3">Duration</th>
+                  <th className="px-3 py-3">Artwork Used</th>
+                  <th className="px-3 py-3">Installed By</th>
+                  <th className="px-3 py-3">Install Due</th>
+                  <th className="px-3 py-3">Expiry</th>
+                  <th className="px-3 py-3">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredOrders.map(order => {
+                  const active = selectedOrder.id === order.id;
+                  return (
+                    <tr
+                      key={order.id}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Open work order ${order.id}`}
+                      className={`cursor-pointer border-t border-white/10 transition hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#7EB8F7] ${active ? 'bg-[#2E7FFF]/10' : ''}`}
+                      onClick={() => setSelectedOrderId(order.id)}
+                      onKeyDown={event => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          setSelectedOrderId(order.id);
+                        }
+                      }}
+                    >
+                      <td className="px-3 py-3 align-top">
+                        <span className="block text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">{order.id}</span>
+                        <span className="mt-1 block font-black text-white">{order.campaign}</span>
+                        <span className="text-xs text-[#9DB4D0]">{order.client} - {order.buyer}</span>
+                      </td>
+                      <td className="px-3 py-3 align-top">
+                        <span className="block font-bold text-white">{order.asset.name}</span>
+                        <span className="text-xs text-[#7A94B4]">{order.asset.market} - {order.asset.format}</span>
+                      </td>
+                      <td className="px-3 py-3 align-top">
+                        <span className="block font-bold text-white">{order.flightLabel}</span>
+                        <span className="text-xs text-[#7A94B4]">{order.durationDays || 'TBD'} days</span>
+                      </td>
+                      <td className="px-3 py-3 align-top">
+                        <span className="block max-w-[210px] truncate font-bold text-white">{order.artworkFile}</span>
+                        <span className="text-xs text-[#7A94B4]">{order.artworkState}</span>
+                      </td>
+                      <td className="px-3 py-3 align-top">
+                        <span className="block font-bold text-white">{order.installedBy}</span>
+                        <span className="text-xs text-[#7A94B4]">{order.installOwner}</span>
+                      </td>
+                      <td className="px-3 py-3 align-top">
+                        <span className="block font-bold text-white">{formatDate(order.installationDueDate)}</span>
+                        <span className="text-xs text-[#7A94B4]">{order.workOrderAssignment}</span>
+                      </td>
+                      <td className="px-3 py-3 align-top">
+                        <span className="block font-bold text-white">{order.expiryLabel}</span>
+                        <span className={order.daysToExpiry <= 7 ? 'text-xs font-bold text-amber-100' : 'text-xs text-[#7A94B4]'}>
+                          {order.daysToExpiry >= 0 ? `${order.daysToExpiry} days left` : 'Expired'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 align-top">
+                        <Pill tone={workOrderStatusTone(order.status)}>{order.status}</Pill>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {filteredOrders.length === 0 && (
+              <div className="p-8 text-center text-sm text-[#9DB4D0]">No campaign work orders match the current filters.</div>
+            )}
+          </div>
+        </div>
+
+        <aside className="sticky top-5 space-y-4">
+          <div className="overflow-hidden rounded-lg border border-[#2E7FFF]/30 bg-[#0B172A] shadow-xl shadow-black/20">
+            <AssetPopupVisual asset={selectedOrder.asset} className="h-44 w-full" />
+            <div className="p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.18em] text-[#7A94B4]">{selectedOrder.id}</p>
+                  <h3 className="mt-1 text-xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{selectedOrder.campaign}</h3>
+                  <p className="mt-1 text-sm text-[#9DB4D0]">Commissioned by {selectedOrder.client}</p>
+                </div>
+                <Pill tone={workOrderStatusTone(selectedOrder.status)}>{selectedOrder.status}</Pill>
+              </div>
+
+              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                {[
+                  ['Asset', selectedOrder.asset.name],
+                  ['Buyer', selectedOrder.buyer],
+                  ['Flight', selectedOrder.flightLabel],
+                  ['Install due', formatDate(selectedOrder.installationDueDate)],
+                  ['Assignment', selectedOrder.workOrderAssignment],
+                  ['Campaign expiry', selectedOrder.expiryLabel],
+                  ['Installed by', selectedOrder.installedBy],
+                  ['Proof', selectedOrder.asset.evidenceStatus],
+                  ['Permit', selectedOrder.asset.permitStatus],
+                  ['Health', String(selectedOrder.asset.healthScore)],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
+                    <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
+                    <p className="mt-1 text-sm font-black text-white">{value}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4 rounded-lg border border-white/10 bg-[#07111F] p-3">
+                <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">Artwork used</p>
+                <p className="mt-2 text-sm font-black text-white">{selectedOrder.artworkTitle}</p>
+                <p className="mt-1 break-all font-mono text-xs text-[#B8C7DB]">{selectedOrder.artworkFile}</p>
+                <p className="mt-2 text-xs leading-5 text-[#9DB4D0]">{selectedOrder.artworkSpec} - {selectedOrder.artworkState}</p>
+              </div>
+
+              <div className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/10 p-3">
+                <p className="text-[10px] font-black uppercase tracking-wide text-amber-100">Operator action</p>
+                <p className="mt-2 text-sm leading-6 text-white">{selectedOrder.nextAction}</p>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button type="button" className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={openSelectedAsset}>
+                  Open Asset <ExternalLink size={14} />
+                </button>
+                <button type="button" className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-black text-white hover:bg-white/10" onClick={reviewSelectedProof}>
+                  Proof <Camera size={14} />
+                </button>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button type="button" className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-black text-white hover:bg-white/10" onClick={assignSelectedSurvey}>
+                  Survey <ClipboardCheck size={14} />
+                </button>
+                <button type="button" className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-black text-white hover:bg-white/10" onClick={onOpenClientPages}>
+                  Client Page <Globe2 size={14} />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Future bookings</p>
+              <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">{`${selectedOrder.futureBookings.length} visible`}</Pill>
+            </div>
+            <div className="mt-3 space-y-2">
+              {selectedOrder.futureBookings.map(booking => (
+                <div key={booking} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
+                  <p className="text-sm font-black text-white">{booking}</p>
+                  <p className="mt-1 text-xs text-[#9DB4D0]">Reserve artwork specs, access window and pre-install survey before confirmation.</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
+            <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Linked field activity</p>
+            <div className="mt-3 grid gap-2">
+              <div className="rounded-lg border border-white/10 bg-[#07111F] p-3">
+                <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">Survey assignment</p>
+                <p className="mt-1 text-sm font-black text-white">{selectedOrder.linkedAssignment?.name ?? 'Not assigned'}</p>
+                <p className="mt-1 text-xs text-[#9DB4D0]">{selectedOrder.linkedAssignment ? `${selectedOrder.linkedAssignment.team} - due ${formatDate(selectedOrder.linkedAssignment.dueDate)}` : 'Create an assignment to capture QR, GPS and photo evidence.'}</p>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-[#07111F] p-3">
+                <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">Latest inspection</p>
+                <p className="mt-1 text-sm font-black text-white">{selectedOrder.latestSubmission ? selectedOrder.latestSubmission.status : 'No submission yet'}</p>
+                <p className="mt-1 text-xs text-[#9DB4D0]">{selectedOrder.latestSubmission ? `${selectedOrder.latestSubmission.submittedBy} - score ${selectedOrder.latestSubmission.score}` : 'Field evidence will appear here once submitted.'}</p>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+type OOHObligationStatus = 'Overdue' | 'Due Soon' | 'In Progress' | 'Met';
+type OOHObligationCategory = 'Permits' | 'Installation' | 'Proof' | 'Client Reporting' | 'Inspection' | 'DOOH Playback';
+
+interface OOHObligation {
+  id: string;
+  code: string;
+  title: string;
+  description: string;
+  category: OOHObligationCategory;
+  status: OOHObligationStatus;
+  dueDate: string;
+  owner: string;
+  authority: string;
+  market: string;
+  asset: OOHAsset;
+  campaign: string;
+  client: string;
+  action: string;
+  evidenceRequired: string[];
+  linkedControls: Array<{ code: string; title: string; status: string }>;
+  timeline: Array<{ date: string; note: string }>;
+}
+
+const obligationCategories: Array<'All Categories' | OOHObligationCategory> = ['All Categories', 'Permits', 'Installation', 'Proof', 'Client Reporting', 'Inspection', 'DOOH Playback'];
+const obligationStatuses: Array<'All Status' | OOHObligationStatus> = ['All Status', 'Overdue', 'Due Soon', 'In Progress', 'Met'];
+
+function obligationStatusTone(status: OOHObligationStatus): string {
+  if (status === 'Met') return 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200';
+  if (status === 'Overdue') return 'border-red-400/25 bg-red-400/10 text-red-200';
+  if (status === 'Due Soon') return 'border-amber-300/25 bg-amber-300/10 text-amber-100';
+  return 'border-blue-300/20 bg-blue-300/10 text-blue-100';
+}
+
+function obligationStatusRank(status: OOHObligationStatus): number {
+  if (status === 'Overdue') return 0;
+  if (status === 'Due Soon') return 1;
+  if (status === 'In Progress') return 2;
+  return 3;
+}
+
+function obligationDueStatus(value: string, met: boolean, inProgress = false, dueSoonDays = 7): OOHObligationStatus {
+  if (met) return 'Met';
+  const days = daysUntil(value);
+  if (days < 0) return 'Overdue';
+  if (inProgress) return 'In Progress';
+  if (days <= dueSoonDays) return 'Due Soon';
+  return 'In Progress';
+}
+
+function buildOOHObligations(data: OOHBootstrap): OOHObligation[] {
+  const livePageAssetIds = new Set(data.clientPages.filter(page => page.status === 'Live').flatMap(page => page.assetIds));
+  const obligations = data.assets.flatMap(asset => {
+    const linkedAssignment = data.assignments.find(assignment => assignment.assetIds.includes(asset.id));
+    const latestSubmission = latestInspectionForAsset(asset.id, data.submissions);
+    const installOwner = assetAttributeValue(asset, 'Install owner') ?? linkedAssignment?.team ?? 'Operations team';
+    const installDue = assetAttributeValue(asset, 'Installation due') ?? dateOffsetInputValue(asset.bookedFrom, -1, 3);
+    const proofDue = dateOffsetInputValue(asset.bookedFrom, 1, 4);
+    const clientDue = dateOffsetInputValue(asset.bookedFrom, 2, 5);
+    const surveyDue = asset.nextSurveyDue;
+    const campaignLabel = asset.campaign || 'Unassigned campaign';
+    const baseTimeline = [
+      { date: formatDate(asset.lastSurveyAt), note: `Latest inspection score ${asset.surveyHistory[0]?.score ?? asset.healthScore}.` },
+      { date: formatDate(asset.bookedFrom ?? new Date().toISOString()), note: `${campaignLabel} flight context linked to asset record.` },
+    ];
+    const rows: OOHObligation[] = [
+      {
+        id: `OBL-PERMIT-${asset.id}`,
+        code: `OBL-PER-${asset.id.split('-').slice(-1)[0]}`,
+        title: 'Permit and site-right validity',
+        description: 'Confirm the asset permit, NOC, site-owner right, and expiry window before installation, continued display, or client publishing.',
+        category: 'Permits',
+        status: asset.permitStatus === 'Valid' && daysUntil(asset.permitExpiry) > 30 ? 'Met' : daysUntil(asset.permitExpiry) < 0 || asset.permitStatus === 'Expired' ? 'Overdue' : 'Due Soon',
+        dueDate: asset.permitExpiry,
+        owner: asset.owner,
+        authority: asset.owner === 'OOH Assets' ? 'Internal compliance desk' : asset.owner,
+        market: asset.market,
+        asset,
+        campaign: campaignLabel,
+        client: asset.client,
+        action: asset.permitStatus === 'Valid' ? 'Keep permit reference attached and monitor expiry window.' : 'Update permit/NOC reference before field work or client publication.',
+        evidenceRequired: ['Permit or site-owner approval reference', 'Expiry date confirmation', 'Asset ID and location match', 'Owner/site acknowledgement if required'],
+        linkedControls: [
+          { code: asset.id, title: `${asset.market} - ${asset.route}`, status: asset.permitStatus },
+          { code: 'PUBLISH-BLOCK', title: 'Client page publish block when permit is expired or pending', status: asset.permitStatus === 'Valid' ? 'Clear' : 'Active' },
+        ],
+        timeline: [{ date: formatDate(asset.permitExpiry), note: `Permit status: ${asset.permitStatus}.` }, ...baseTimeline],
+      },
+      {
+        id: `OBL-INSTALL-${asset.id}`,
+        code: `OBL-INS-${asset.id.split('-').slice(-1)[0]}`,
+        title: 'Install by campaign deadline',
+        description: 'Assign the installation owner, confirm access, and complete installation before the booked flight requires proof capture.',
+        category: 'Installation',
+        status: obligationDueStatus(installDue, asset.installStatus === 'Installed', asset.installStatus === 'In Progress' || asset.installStatus === 'Scheduled', 3),
+        dueDate: installDue,
+        owner: installOwner,
+        authority: 'Campaign operations',
+        market: asset.market,
+        asset,
+        campaign: campaignLabel,
+        client: asset.client,
+        action: asset.installStatus === 'Installed' ? 'Installation is closed; maintain proof and inspection history.' : 'Open the work order and confirm the assigned install team and access window.',
+        evidenceRequired: ['Work order assignment', 'Access window confirmation', 'Installed creative photo', 'Installer/supervisor sign-off'],
+        linkedControls: [
+          { code: linkedAssignment?.id ?? 'ASSIGNMENT-PENDING', title: linkedAssignment?.name ?? 'Installation assignment not yet created', status: linkedAssignment?.status ?? 'Missing' },
+          { code: 'WORK-ORDER', title: assetAttributeValue(asset, 'Work order assignment') ?? 'Installation work order required', status: asset.installStatus },
+        ],
+        timeline: [{ date: formatDate(installDue), note: `Install due date for ${campaignLabel}.` }, ...baseTimeline],
+      },
+      {
+        id: `OBL-PROOF-${asset.id}`,
+        code: `OBL-PRF-${asset.id.split('-').slice(-1)[0]}`,
+        title: 'Proof-of-posting evidence approval',
+        description: 'Capture QR/GPS/photo/signature evidence and close reviewer approval before the asset can be published to the client proof pack.',
+        category: 'Proof',
+        status: asset.evidenceStatus === 'Ready' ? 'Met' : asset.evidenceStatus === 'Pending' ? 'In Progress' : obligationDueStatus(proofDue, false, false, 2),
+        dueDate: proofDue,
+        owner: latestSubmission?.reviewer ?? linkedAssignment?.reviewer ?? 'Evidence reviewer',
+        authority: 'Field proof governance',
+        market: asset.market,
+        asset,
+        campaign: campaignLabel,
+        client: asset.client,
+        action: asset.evidenceStatus === 'Ready' ? 'Keep the approved proof available for client evidence packs.' : asset.evidenceStatus === 'Pending' ? 'Review the captured submission and approve or reject with a clear reason.' : 'Assign a field proof survey with photo categories, QR scan, GPS lock and signature.',
+        evidenceRequired: ['Wide photo', 'Close-up photo', 'Angle or context photo', 'QR verification', 'GPS accuracy', 'Supervisor signature'],
+        linkedControls: [
+          { code: latestSubmission?.id ?? 'SUBMISSION-PENDING', title: latestSubmission ? `Latest submission score ${latestSubmission.score}` : 'No proof submission captured', status: latestSubmission?.status ?? asset.evidenceStatus },
+          { code: 'CLIENT-PUBLISH', title: 'Only approved evidence can be visible to clients', status: latestSubmission?.clientPublishStatus ?? 'Internal Only' },
+        ],
+        timeline: [{ date: formatDate(proofDue), note: `Proof SLA: ${asset.proofSla ?? 'Evidence due after installation'}.` }, ...baseTimeline],
+      },
+      {
+        id: `OBL-CLIENT-${asset.id}`,
+        code: `OBL-CLI-${asset.id.split('-').slice(-1)[0]}`,
+        title: 'Client evidence page coverage',
+        description: 'Publish only approved installation evidence, survey results, map context, and access-controlled campaign proof to the client page.',
+        category: 'Client Reporting',
+        status: asset.evidenceStatus === 'Ready' && (livePageAssetIds.has(asset.id) || Boolean(asset.lastClientView)) ? 'Met' : asset.evidenceStatus === 'Ready' ? 'Due Soon' : obligationDueStatus(clientDue, false, false, 3),
+        dueDate: clientDue,
+        owner: asset.buyerContact ?? 'Account owner',
+        authority: 'Client reporting desk',
+        market: asset.market,
+        asset,
+        campaign: campaignLabel,
+        client: asset.client,
+        action: asset.evidenceStatus === 'Ready' ? 'Add the approved asset proof to a secure client page with expiry and access logging.' : 'Approve proof first, then publish it to the client evidence page.',
+        evidenceRequired: ['Approved proof set', 'Campaign asset list', 'Map location', 'Survey score/result', 'Page expiry/access state'],
+        linkedControls: [
+          { code: 'CLIENT-PAGE', title: livePageAssetIds.has(asset.id) ? 'Live client evidence page linked' : 'Client evidence page not linked', status: livePageAssetIds.has(asset.id) ? 'Live' : 'Missing' },
+          { code: 'ACCESS-LOG', title: `Last client view: ${getLastClientView(asset)}`, status: asset.lastClientView ? 'Trace available' : 'No view trace' },
+        ],
+        timeline: [{ date: formatDate(clientDue), note: 'Target date for client-facing proof coverage.' }, ...baseTimeline],
+      },
+      {
+        id: `OBL-SURVEY-${asset.id}`,
+        code: `OBL-SRV-${asset.id.split('-').slice(-1)[0]}`,
+        title: 'Recurring inspection cadence',
+        description: 'Keep recurring field inspections current so asset condition, creative match, illumination/player status, and proof quality do not go stale.',
+        category: 'Inspection',
+        status: obligationDueStatus(surveyDue, daysUntil(surveyDue) > 3, Boolean(linkedAssignment), 3),
+        dueDate: surveyDue,
+        owner: linkedAssignment?.team ?? 'Survey coordinator',
+        authority: 'Field operations',
+        market: asset.market,
+        asset,
+        campaign: campaignLabel,
+        client: asset.client,
+        action: daysUntil(surveyDue) < 0 ? 'Assign or dispatch the overdue inspection immediately.' : 'Keep the next recurring inspection scheduled with QR/GPS/photo requirements.',
+        evidenceRequired: ['Checklist answers', 'Question-level photo evidence where applicable', 'GPS lock', 'QR/NFC confirmation', 'Reviewer decision'],
+        linkedControls: [
+          { code: linkedAssignment?.id ?? 'ASSIGNMENT-PENDING', title: linkedAssignment?.name ?? 'Recurring survey assignment required', status: linkedAssignment?.status ?? 'Missing' },
+          { code: asset.surveyHistory[0]?.id ?? 'NO-HISTORY', title: `Last survey ${formatDate(asset.lastSurveyAt)}`, status: asset.surveyHistory[0]?.status ?? 'No history' },
+        ],
+        timeline: [{ date: formatDate(surveyDue), note: 'Next recurring inspection due.' }, ...baseTimeline],
+      },
+    ];
+
+    const isDigital = asset.format.toLowerCase().includes('digital') || asset.illumination === 'Digital' || asset.playerStatus !== 'Not Installed';
+    if (isDigital) {
+      const playerReady = asset.powerStatus === 'Online' && asset.playerStatus === 'Online' && (asset.playerUptime ?? 0) >= 98;
+      rows.push({
+        id: `OBL-PLAYER-${asset.id}`,
+        code: `OBL-PLY-${asset.id.split('-').slice(-1)[0]}`,
+        title: 'DOOH player and playback readiness',
+        description: 'Confirm power, player status, uptime, and playback-readiness signals before treating the digital asset as campaign-ready.',
+        category: 'DOOH Playback',
+        status: playerReady ? 'Met' : obligationDueStatus(asset.bookedFrom ?? new Date().toISOString(), false, asset.playerStatus === 'Online', 2),
+        dueDate: asset.bookedFrom ?? new Date().toISOString(),
+        owner: 'Digital operations',
+        authority: 'Player / ad-server feed',
+        market: asset.market,
+        asset,
+        campaign: campaignLabel,
+        client: asset.client,
+        action: playerReady ? 'Continue monitoring player uptime and playback feed.' : 'Check power/player state and assign maintenance before the campaign flight is treated as ready.',
+        evidenceRequired: ['Player ID/status', 'Power state', 'Uptime threshold', 'Playback screenshot or ad-server feed', 'Field photo if player signal is unhealthy'],
+        linkedControls: [
+          { code: 'POWER', title: `Power state ${asset.powerStatus}`, status: asset.powerStatus },
+          { code: 'PLAYER', title: `Player state ${asset.playerStatus}`, status: `${asset.playerUptime ?? 0}% uptime` },
+        ],
+        timeline: [{ date: formatDate(asset.bookedFrom ?? new Date().toISOString()), note: 'Playback readiness required before flight start.' }, ...baseTimeline],
+      });
+    }
+
+    return rows;
+  });
+
+  return obligations.sort((a, b) => obligationStatusRank(a.status) - obligationStatusRank(b.status) || Date.parse(a.dueDate) - Date.parse(b.dueDate));
+}
+
+function OOHObligations({
+  data,
+  selectedAssetId,
+  onSelectAsset,
+  onOpenAssets,
+  onOpenSurveys,
+  onOpenEvidence,
+  onOpenClientPages,
+  onOpenWorkOrders,
+}: {
+  data: OOHBootstrap;
+  selectedAssetId: string;
+  onSelectAsset: (assetId: string) => void;
+  onOpenAssets: () => void;
+  onOpenSurveys: () => void;
+  onOpenEvidence: () => void;
+  onOpenClientPages: () => void;
+  onOpenWorkOrders: () => void;
+}) {
+  const obligations = useMemo(() => buildOOHObligations(data), [data]);
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'All Status' | OOHObligationStatus>('All Status');
+  const [categoryFilter, setCategoryFilter] = useState<'All Categories' | OOHObligationCategory>('All Categories');
+  const [marketFilter, setMarketFilter] = useState('All markets');
+  const [selectedId, setSelectedId] = useState('');
+  const markets = useMemo(() => ['All markets', ...Array.from(new Set(data.assets.map(asset => asset.market))).filter(Boolean)], [data.assets]);
+  const filtered = obligations.filter(item => {
+    const haystack = `${item.code} ${item.title} ${item.description} ${item.asset.name} ${item.market} ${item.campaign} ${item.client} ${item.owner} ${item.authority}`.toLowerCase();
+    return haystack.includes(query.toLowerCase())
+      && (statusFilter === 'All Status' || item.status === statusFilter)
+      && (categoryFilter === 'All Categories' || item.category === categoryFilter)
+      && (marketFilter === 'All markets' || item.market === marketFilter);
+  });
+  const selected = obligations.find(item => item.id === selectedId)
+    ?? obligations.find(item => item.asset.id === selectedAssetId)
+    ?? filtered[0]
+    ?? obligations[0];
+  const counts = {
+    overdue: obligations.filter(item => item.status === 'Overdue').length,
+    dueSoon: obligations.filter(item => item.status === 'Due Soon').length,
+    proof: obligations.filter(item => item.category === 'Proof' && item.status !== 'Met').length,
+    met: obligations.filter(item => item.status === 'Met').length,
+  };
+  const selectObligation = (item: OOHObligation) => {
+    setSelectedId(item.id);
+    onSelectAsset(item.asset.id);
+  };
+  const openPrimaryAction = (item: OOHObligation) => {
+    onSelectAsset(item.asset.id);
+    if (item.category === 'Proof') onOpenEvidence();
+    else if (item.category === 'Inspection') onOpenSurveys();
+    else if (item.category === 'Client Reporting') onOpenClientPages();
+    else if (item.category === 'Installation') onOpenWorkOrders();
+    else onOpenAssets();
+  };
+
+  if (!selected) return null;
+
+  return (
+    <section className="space-y-5">
+      <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#7EB8F7]">OOH obligation control</p>
+            <h2 className="mt-1 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Obligations Register</h2>
+            <p className="mt-2 max-w-4xl text-sm leading-6 text-[#B8C7DB]">Track campaign, permit, installation, proof, inspection, client-reporting and DOOH playback obligations against every OOH asset.</p>
+          </div>
+          <button type="button" className="inline-flex items-center gap-2 rounded-lg bg-[#2E7FFF] px-4 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={() => openPrimaryAction(selected)}>
+            Open Required Action <ExternalLink size={15} />
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {[
+            ['Overdue', String(counts.overdue), 'Missed obligations requiring immediate owner action', 'Overdue'],
+            ['Due Soon', String(counts.dueSoon), 'Items inside the operating action window', 'Due Soon'],
+            ['Proof Obligations', String(counts.proof), 'Proof duties that are not yet closed', 'Proof'],
+            ['Met', String(counts.met), 'Closed obligations with supporting state', 'Met'],
+          ].map(([label, value, helper, target]) => (
+            <button
+              key={label}
+              type="button"
+              className="rounded-lg border border-white/10 bg-[#07111F] p-4 text-left transition hover:border-[#7EB8F7]/45 hover:bg-white/[0.035]"
+              onClick={() => {
+                if (target === 'Proof') {
+                  setCategoryFilter('Proof');
+                  setStatusFilter('All Status');
+                } else {
+                  setStatusFilter(target as OOHObligationStatus);
+                  setCategoryFilter('All Categories');
+                }
+              }}
+            >
+              <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
+              <p className="mt-2 text-3xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{value}</p>
+              <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{helper}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1.35fr)_430px]">
+        <div className="min-w-0 rounded-lg border border-white/10 bg-[#0B172A] p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h3 className="text-xl font-black text-white">Operating obligation queue</h3>
+              <p className="mt-1 text-sm text-[#9DB4D0]">Click an obligation to see required evidence, linked controls and the action owner.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <label className="flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm text-[#9DB4D0]">
+                <Search size={15} />
+                <input className="w-52 bg-transparent text-white outline-none placeholder:text-[#58708E]" placeholder="Search obligations" value={query} onChange={event => setQuery(event.target.value)} />
+              </label>
+              <select className="h-10 rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm font-bold text-white outline-none" value={statusFilter} onChange={event => setStatusFilter(event.target.value as 'All Status' | OOHObligationStatus)}>
+                {obligationStatuses.map(item => <option key={item} value={item}>{item}</option>)}
+              </select>
+              <select className="h-10 rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm font-bold text-white outline-none" value={categoryFilter} onChange={event => setCategoryFilter(event.target.value as 'All Categories' | OOHObligationCategory)}>
+                {obligationCategories.map(item => <option key={item} value={item}>{item}</option>)}
+              </select>
+              <select className="h-10 rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm font-bold text-white outline-none" value={marketFilter} onChange={event => setMarketFilter(event.target.value)}>
+                {markets.map(item => <option key={item} value={item}>{item}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="custom-scrollbar mt-4 w-full max-w-full overflow-x-auto rounded-lg border border-white/10">
+            <table className="w-full min-w-[1120px] border-collapse text-left text-sm">
+              <thead className="bg-[#07111F] text-[10px] uppercase tracking-wide text-[#7A94B4]">
+                <tr>
+                  <th className="px-4 py-3">Code</th>
+                  <th className="px-4 py-3">Obligation</th>
+                  <th className="px-4 py-3">Asset / Campaign</th>
+                  <th className="px-4 py-3">Category</th>
+                  <th className="px-4 py-3">Due</th>
+                  <th className="px-4 py-3">Owner</th>
+                  <th className="px-4 py-3">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(item => {
+                  const active = selected.id === item.id;
+                  return (
+                    <tr
+                      key={item.id}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Open obligation ${item.code}`}
+                      className={`cursor-pointer border-t border-white/10 transition hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#7EB8F7] ${active ? 'bg-[#2E7FFF]/10' : ''}`}
+                      onClick={() => selectObligation(item)}
+                      onKeyDown={event => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          selectObligation(item);
+                        }
+                      }}
+                    >
+                      <td className="px-4 py-4 align-top font-mono text-xs font-black text-[#7EB8F7]">{item.code}</td>
+                      <td className="px-4 py-4 align-top">
+                        <span className="block max-w-[260px] font-black text-white">{item.title}</span>
+                        <span className="mt-1 block max-w-[300px] text-xs leading-5 text-[#7A94B4]">{item.description}</span>
+                      </td>
+                      <td className="px-4 py-4 align-top">
+                        <span className="block font-bold text-white">{item.asset.name}</span>
+                        <span className="text-xs text-[#9DB4D0]">{item.campaign} - {item.client}</span>
+                      </td>
+                      <td className="px-4 py-4 align-top text-[#B8C7DB]">{item.category}</td>
+                      <td className="px-4 py-4 align-top">
+                        <span className="block font-bold text-white">{formatDate(item.dueDate)}</span>
+                        <span className={daysUntil(item.dueDate) < 0 ? 'text-xs font-bold text-red-200' : 'text-xs text-[#7A94B4]'}>
+                          {daysUntil(item.dueDate) < 0 ? `${Math.abs(daysUntil(item.dueDate))} days overdue` : `${daysUntil(item.dueDate)} days left`}
+                        </span>
+                      </td>
+                      <td className="px-4 py-4 align-top text-[#B8C7DB]">{item.owner}</td>
+                      <td className="px-4 py-4 align-top"><Pill tone={obligationStatusTone(item.status)}>{item.status}</Pill></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {filtered.length === 0 && (
+              <div className="p-8 text-center text-sm text-[#9DB4D0]">No obligations match the current filters.</div>
+            )}
+          </div>
+        </div>
+
+        <aside className="sticky top-5 space-y-4">
+          <div className="overflow-hidden rounded-lg border border-[#2E7FFF]/30 bg-[#0B172A] shadow-xl shadow-black/20">
+            <AssetPopupVisual asset={selected.asset} className="h-40 w-full" />
+            <div className="p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[11px] font-black uppercase tracking-[0.18em] text-[#7EB8F7]">{selected.code}</p>
+                  <h3 className="mt-2 text-xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{selected.title}</h3>
+                  <p className="mt-2 text-sm leading-6 text-[#B8C7DB]">{selected.description}</p>
+                </div>
+                <Pill tone={obligationStatusTone(selected.status)}>{selected.status}</Pill>
+              </div>
+
+              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                {[
+                  ['Asset', selected.asset.name],
+                  ['Campaign', selected.campaign],
+                  ['Client', selected.client],
+                  ['Market', selected.market],
+                  ['Category', selected.category],
+                  ['Due date', formatDate(selected.dueDate)],
+                  ['Owner', selected.owner],
+                  ['Authority', selected.authority],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
+                    <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
+                    <p className="mt-1 text-sm font-black text-white">{value}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/10 p-3">
+                <p className="text-[10px] font-black uppercase tracking-wide text-amber-100">Required action</p>
+                <p className="mt-2 text-sm leading-6 text-white">{selected.action}</p>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button type="button" className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={() => openPrimaryAction(selected)}>
+                  Open Action <ExternalLink size={14} />
+                </button>
+                <button type="button" className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-black text-white hover:bg-white/10" onClick={() => {
+                  onSelectAsset(selected.asset.id);
+                  onOpenAssets();
+                }}>
+                  Open Asset <Building2 size={14} />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
+            <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Evidence required</p>
+            <div className="mt-3 space-y-2">
+              {selected.evidenceRequired.map(item => (
+                <div key={item} className="flex items-start gap-2 rounded-lg border border-white/10 bg-[#07111F] p-3 text-sm text-white">
+                  <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-emerald-200" />
+                  <span>{item}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
+            <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Linked controls</p>
+            <div className="mt-3 space-y-2">
+              {selected.linkedControls.map(control => (
+                <div key={control.code} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="font-mono text-[11px] font-black text-[#7EB8F7]">{control.code}</p>
+                    <span className="text-xs font-black text-[#B8C7DB]">{control.status}</span>
+                  </div>
+                  <p className="mt-2 text-sm font-black text-white">{control.title}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
+            <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Obligation timeline</p>
+            <div className="mt-3 space-y-0">
+              {selected.timeline.map((entry, index) => (
+                <div key={`${entry.date}-${entry.note}`} className="grid grid-cols-[16px_1fr] gap-3">
+                  <div className="flex flex-col items-center">
+                    <span className={`mt-1 h-2 w-2 rounded-full ${index === 0 ? 'bg-[#7EB8F7]' : 'bg-[#526A87]'}`} />
+                    {index < selected.timeline.length - 1 && <span className="h-full min-h-[34px] w-px bg-white/10" />}
+                  </div>
+                  <div className="pb-4">
+                    <p className="text-[11px] text-[#7A94B4]">{entry.date}</p>
+                    <p className="mt-1 text-sm leading-5 text-white">{entry.note}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+type OOHSettingsSection = 'network' | 'evidence' | 'surveys' | 'client' | 'permits' | 'integrations' | 'access';
+type OOHBooleanSettingKey = {
+  [K in keyof OOHSettingsState]: OOHSettingsState[K] extends boolean ? K : never
+}[keyof OOHSettingsState];
+
+interface OOHSettingsState {
+  defaultMarket: string;
+  assetIdPattern: string;
+  gpsAccuracyMeters: number;
+  clusterZoom: number;
+  permitAlertDays: number;
+  clientPageExpiryDays: number;
+  watermarkLabel: string;
+  reviewerRole: string;
+  surveyRecurrence: AssignmentForm['recurrence'];
+  proofPublishPolicy: string;
+  requireQr: boolean;
+  requireGps: boolean;
+  requireSignature: boolean;
+  requirePhotoByQuestion: boolean;
+  offlineCapture: boolean;
+  mapTeamPins: boolean;
+  blockExpiredPermitPublish: boolean;
+  clientAccessLog: boolean;
+  ssoEnabled: boolean;
+  vendorGate: boolean;
+  playerHealthChecks: boolean;
+}
+
+const oohSettingsDefaults: OOHSettingsState = {
+  defaultMarket: 'Dubai',
+  assetIdPattern: 'OOH-{MARKET}-{FORMAT}-{SEQ}',
+  gpsAccuracyMeters: 8,
+  clusterZoom: 12,
+  permitAlertDays: 45,
+  clientPageExpiryDays: 30,
+  watermarkLabel: '4C360 verified OOH evidence',
+  reviewerRole: 'Field supervisor',
+  surveyRecurrence: 'Weekly',
+  proofPublishPolicy: 'Approved evidence only',
+  requireQr: true,
+  requireGps: true,
+  requireSignature: true,
+  requirePhotoByQuestion: true,
+  offlineCapture: true,
+  mapTeamPins: true,
+  blockExpiredPermitPublish: true,
+  clientAccessLog: true,
+  ssoEnabled: true,
+  vendorGate: true,
+  playerHealthChecks: true,
+};
+
+const oohSettingsSections: Array<{ id: OOHSettingsSection; label: string; icon: LucideIcon; helper: string }> = [
+  { id: 'network', label: 'Network', icon: MapPin, helper: 'GIS, naming and asset controls' },
+  { id: 'evidence', label: 'Evidence', icon: Camera, helper: 'QR, GPS, photos and proof gates' },
+  { id: 'surveys', label: 'Surveys', icon: ClipboardCheck, helper: 'Recurring inspection templates' },
+  { id: 'client', label: 'Client Pages', icon: Globe2, helper: 'Secure sharing and exports' },
+  { id: 'permits', label: 'Permits', icon: ShieldCheck, helper: 'Compliance windows and blocks' },
+  { id: 'integrations', label: 'Integrations', icon: Link2, helper: 'System feeds and sync health' },
+  { id: 'access', label: 'Access', icon: Users, helper: 'Roles, vendors and controls' },
+];
+
+function SettingToggle({
+  label,
+  text,
+  enabled,
+  onToggle,
+}: {
+  label: string;
+  text: string;
+  enabled: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`flex w-full items-center justify-between gap-4 rounded-lg border p-3 text-left transition ${
+        enabled ? 'border-emerald-400/25 bg-emerald-400/10' : 'border-white/10 bg-[#07111F] hover:border-[#7EB8F7]/45'
+      }`}
+      onClick={onToggle}
+      aria-pressed={enabled}
+    >
+      <span className="min-w-0">
+        <span className="block text-sm font-black text-white">{label}</span>
+        <span className="mt-1 block text-xs leading-5 text-[#9DB4D0]">{text}</span>
+      </span>
+      <span className={`relative h-6 w-11 shrink-0 rounded-full border transition ${enabled ? 'border-emerald-300/40 bg-emerald-300/30' : 'border-white/10 bg-white/5'}`}>
+        <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${enabled ? 'left-6' : 'left-1'}`} />
+      </span>
+    </button>
+  );
+}
+
+function SettingsField({
+  label,
+  value,
+  helper,
+  children,
+}: {
+  label: string;
+  value?: string;
+  helper: string;
+  children?: ReactNode;
+}) {
+  return (
+    <label className="block rounded-lg border border-white/10 bg-[#07111F] p-3">
+      <span className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</span>
+      {children ?? <span className="mt-1 block text-sm font-black text-white">{value}</span>}
+      <span className="mt-1 block text-xs leading-5 text-[#9DB4D0]">{helper}</span>
+    </label>
+  );
+}
+
+function OOHSettings({
+  data,
+  onOpenGIS,
+  onOpenSurveys,
+  onOpenEvidence,
+  onOpenClientPages,
+  onOpenVendors,
+}: {
+  data: OOHBootstrap;
+  onOpenGIS: () => void;
+  onOpenSurveys: () => void;
+  onOpenEvidence: () => void;
+  onOpenClientPages: () => void;
+  onOpenVendors: () => void;
+}) {
+  const [section, setSection] = useState<OOHSettingsSection>('network');
+  const [settings, setSettings] = useState<OOHSettingsState>(oohSettingsDefaults);
+  const [notice, setNotice] = useState('Settings are ready for OOH assets, field evidence, client pages and partner governance.');
+  const markets = useMemo(() => Array.from(new Set(data.assets.map(asset => asset.market))).filter(Boolean), [data.assets]);
+  const formats = useMemo(() => Array.from(new Set(data.assets.map(asset => asset.format))).filter(Boolean), [data.assets]);
+  const readyAssets = data.assets.filter(asset => asset.evidenceStatus === 'Ready').length;
+  const proofBlockedAssets = data.assets.filter(asset => asset.evidenceStatus !== 'Ready');
+  const permitWatchAssets = data.assets.filter(asset => ['Pending', 'Expiring', 'Expired'].includes(asset.permitStatus));
+  const activeAssignments = data.assignments.filter(assignment => ['Active', 'In Progress', 'Submitted', 'Overdue'].includes(assignment.status));
+  const liveClientPages = data.clientPages.filter(page => page.status === 'Live');
+  const pendingSubmissions = data.submissions.filter(submission => submission.status === 'Pending Review');
+  const digitalAssets = data.assets.filter(asset => asset.format.toLowerCase().includes('digital') || asset.playerStatus !== 'Not Installed');
+  const digitalReady = digitalAssets.filter(asset => asset.playerStatus === 'Online' && asset.powerStatus === 'Online').length;
+  const selectedSection = oohSettingsSections.find(item => item.id === section) ?? oohSettingsSections[0];
+  const SelectedIcon = selectedSection.icon;
+  const setToggle = (key: OOHBooleanSettingKey) => {
+    setSettings(current => ({ ...current, [key]: !current[key] }));
+  };
+  const saveSettings = () => {
+    setNotice(`OOH settings applied for ${markets.length || 1} markets, ${data.assets.length} assets and ${activeAssignments.length} field assignments.`);
+  };
+  const resetSettings = () => {
+    setSettings(oohSettingsDefaults);
+    setNotice('OOH settings restored to the standard operator profile.');
+  };
+  const proofCategories = ['Wide installation photo', 'Creative close-up', 'QR asset tag', 'Frame or screen condition', 'Power/player status', 'Exception photo'];
+  const roles = [
+    ['OOH administrator', 'All markets, configuration and publishing controls', 'SSO, audit log and approval history'],
+    ['Media operations', 'Assets, campaigns, GIS and booking context', 'Cannot publish rejected evidence'],
+    ['Field supervisor', 'Survey templates, assignments and review decisions', 'QR/GPS/photo rules always enforced'],
+    ['Compliance owner', 'Permit dates, NOC references and publish blocks', 'Can hold client publishing when permits need attention'],
+    ['Client success', 'Secure client pages, access expiry and exports', 'Sees approved evidence only'],
+    ['External field partner', 'Assigned missions and mobile capture', 'No internal navigation or client page control'],
+  ];
+
+  return (
+    <section className="space-y-5">
+      <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#7EB8F7]">OOH platform settings</p>
+            <h2 className="mt-1 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Control how assets, surveys, proof and client pages behave</h2>
+            <p className="mt-2 max-w-4xl text-sm leading-6 text-[#B8C7DB]">Adapted for OOH operators: configure GIS confidence, field evidence rules, recurring surveys, publishing controls, permit governance, integration feeds and partner access.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-black text-white hover:bg-white/10" onClick={resetSettings}>
+              <Settings2 size={16} /> Reset OOH Defaults
+            </button>
+            <button type="button" className="inline-flex items-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={saveSettings}>
+              <CheckCircle2 size={16} /> Apply Settings
+            </button>
+          </div>
+        </div>
+        <div className="mt-4 rounded-lg border border-blue-300/20 bg-blue-300/10 p-3 text-sm font-bold text-blue-100">{notice}</div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          {[
+            ['Assets Governed', String(data.assets.length), `${markets.length || 1} markets and ${formats.length || 1} formats`],
+            ['Proof Ready', `${readyAssets}/${data.assets.length}`, `${proofBlockedAssets.length} assets need evidence action`],
+            ['Field Assignments', String(activeAssignments.length), `${pendingSubmissions.length} submissions waiting for review`],
+            ['Client Pages', String(liveClientPages.length), `${settings.clientPageExpiryDays} day default expiry`],
+            ['DOOH Readiness', digitalAssets.length ? `${digitalReady}/${digitalAssets.length}` : 'N/A', settings.playerHealthChecks ? 'Player checks enabled' : 'Manual player checks'],
+          ].map(([label, value, helper]) => (
+            <div key={label} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
+              <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
+              <p className="mt-2 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{value}</p>
+              <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{helper}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
+        <aside className="rounded-lg border border-white/10 bg-[#0B172A] p-3">
+          <p className="px-2 text-[10px] font-black uppercase tracking-[0.2em] text-[#7A94B4]">Settings workspace</p>
+          <div className="mt-3 grid gap-2">
+            {oohSettingsSections.map(item => {
+              const Icon = item.icon;
+              const active = section === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`flex items-center gap-3 rounded-lg border p-3 text-left transition ${active ? 'border-[#2E7FFF] bg-[#102343]' : 'border-white/10 bg-[#07111F] hover:border-[#7EB8F7]/45'}`}
+                  onClick={() => setSection(item.id)}
+                >
+                  <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border ${active ? 'border-[#2E7FFF]/40 bg-[#2E7FFF]/18 text-white' : 'border-white/10 bg-white/5 text-[#7EB8F7]'}`}>
+                    <Icon size={18} />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-black text-white">{item.label}</span>
+                    <span className="mt-0.5 block text-xs leading-5 text-[#9DB4D0]">{item.helper}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+
+        <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
+          <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+            <div className="flex items-start gap-3">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[#2E7FFF]/35 bg-[#2E7FFF]/14 text-[#9BC5FF]">
+                <SelectedIcon size={20} />
+              </span>
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#7EB8F7]">{selectedSection.label} controls</p>
+                <h3 className="text-xl font-black text-white">{selectedSection.helper}</h3>
+              </div>
+            </div>
+            <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">{settings.proofPublishPolicy}</Pill>
+          </div>
+
+          {section === 'network' && (
+            <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+              <div className="grid gap-3 md:grid-cols-2">
+                <SettingsField label="Default market" helper="Used when adding a new OOH unit.">
+                  <select className="mt-2 w-full rounded-lg border border-white/10 bg-[#0B172A] px-3 py-2 text-sm font-black text-white" value={settings.defaultMarket} onChange={event => setSettings(current => ({ ...current, defaultMarket: event.target.value }))}>
+                    {[...markets, 'Abu Dhabi', 'Sharjah'].filter((item, index, arr) => arr.indexOf(item) === index).map(market => <option key={market}>{market}</option>)}
+                  </select>
+                </SettingsField>
+                <SettingsField label="Asset ID pattern" helper="Controls imported and manually created IDs.">
+                  <input className="mt-2 w-full rounded-lg border border-white/10 bg-[#0B172A] px-3 py-2 text-sm font-black text-white" value={settings.assetIdPattern} onChange={event => setSettings(current => ({ ...current, assetIdPattern: event.target.value }))} />
+                </SettingsField>
+                <SettingsField label="GPS tolerance" helper="Maximum acceptable field capture accuracy in meters.">
+                  <input type="number" min={1} max={50} className="mt-2 w-full rounded-lg border border-white/10 bg-[#0B172A] px-3 py-2 text-sm font-black text-white" value={settings.gpsAccuracyMeters} onChange={event => setSettings(current => ({ ...current, gpsAccuracyMeters: Number(event.target.value) || 1 }))} />
+                </SettingsField>
+                <SettingsField label="Cluster zoom" helper="Default GIS zoom level for network operations.">
+                  <input type="number" min={8} max={18} className="mt-2 w-full rounded-lg border border-white/10 bg-[#0B172A] px-3 py-2 text-sm font-black text-white" value={settings.clusterZoom} onChange={event => setSettings(current => ({ ...current, clusterZoom: Number(event.target.value) || 12 }))} />
+                </SettingsField>
+              </div>
+              <div className="space-y-3">
+                <SettingToggle label="Show field teams on GIS" text="Display live crew pins beside OOH assets and action hotspots." enabled={settings.mapTeamPins} onToggle={() => setToggle('mapTeamPins')} />
+                <SettingToggle label="DOOH player readiness" text="Include player and power status in map and asset decision signals." enabled={settings.playerHealthChecks} onToggle={() => setToggle('playerHealthChecks')} />
+                <button type="button" className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={onOpenGIS}>
+                  Open GIS Operations <ExternalLink size={14} />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {section === 'evidence' && (
+            <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+              <div className="grid gap-3 md:grid-cols-2">
+                <SettingToggle label="QR scan required" text="Every proof submission must verify the physical asset tag." enabled={settings.requireQr} onToggle={() => setToggle('requireQr')} />
+                <SettingToggle label="GPS lock required" text={`Accept capture only inside ${settings.gpsAccuracyMeters}m tolerance.`} enabled={settings.requireGps} onToggle={() => setToggle('requireGps')} />
+                <SettingToggle label="Photo evidence per question" text="Relevant checklist questions require their own photo evidence." enabled={settings.requirePhotoByQuestion} onToggle={() => setToggle('requirePhotoByQuestion')} />
+                <SettingToggle label="Signature on completion" text="Field lead signs the inspection before submission." enabled={settings.requireSignature} onToggle={() => setToggle('requireSignature')} />
+                <SettingToggle label="Offline capture and sync" text="Allow field teams to capture on site and sync once connected." enabled={settings.offlineCapture} onToggle={() => setToggle('offlineCapture')} />
+                <SettingsField label="Reviewer role" helper="Default owner for approval decisions.">
+                  <select className="mt-2 w-full rounded-lg border border-white/10 bg-[#0B172A] px-3 py-2 text-sm font-black text-white" value={settings.reviewerRole} onChange={event => setSettings(current => ({ ...current, reviewerRole: event.target.value }))}>
+                    {['Field supervisor', 'Media operations', 'Client success', 'Compliance owner'].map(role => <option key={role}>{role}</option>)}
+                  </select>
+                </SettingsField>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+                <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Required photo categories</p>
+                <div className="mt-3 grid gap-2">
+                  {proofCategories.map(category => (
+                    <div key={category} className="flex items-center gap-2 rounded-lg border border-white/10 bg-[#0B172A] p-3 text-sm font-black text-white">
+                      <Camera size={15} className="text-[#7EB8F7]" /> {category}
+                    </div>
+                  ))}
+                </div>
+                <button type="button" className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={onOpenEvidence}>
+                  Open Evidence Workbench <ExternalLink size={14} />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {section === 'surveys' && (
+            <div className="mt-5 grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+              <div className="space-y-3">
+                <SettingsField label="Default recurrence" helper="Used when assigning inspections from an asset.">
+                  <select className="mt-2 w-full rounded-lg border border-white/10 bg-[#0B172A] px-3 py-2 text-sm font-black text-white" value={settings.surveyRecurrence} onChange={event => setSettings(current => ({ ...current, surveyRecurrence: event.target.value as AssignmentForm['recurrence'] }))}>
+                    {recurrenceOptions.map(option => <option key={option}>{option}</option>)}
+                  </select>
+                </SettingsField>
+                <button type="button" className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={onOpenSurveys}>
+                  Open Survey Templates <ExternalLink size={14} />
+                </button>
+              </div>
+              <div className="grid gap-3">
+                {data.assignments.slice(0, 4).map(assignment => (
+                  <div key={assignment.id} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-black text-white">{assignment.name}</p>
+                        <p className="mt-1 text-xs text-[#9DB4D0]">{assignment.team} - {assignment.recurrence} - due {formatDate(assignment.dueDate)}</p>
+                      </div>
+                      <Pill>{assignment.status}</Pill>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {assignment.accessRules.qrScan && <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">QR</Pill>}
+                      {assignment.accessRules.gpsRequired && <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">GPS</Pill>}
+                      {assignment.accessRules.photoRequired && <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">Photos</Pill>}
+                      {assignment.accessRules.signatureRequired && <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">Signature</Pill>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {section === 'client' && (
+            <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+              <div className="grid gap-3 md:grid-cols-2">
+                <SettingsField label="Evidence page expiry" helper="Default number of days before a shared page expires.">
+                  <input type="number" min={1} max={180} className="mt-2 w-full rounded-lg border border-white/10 bg-[#0B172A] px-3 py-2 text-sm font-black text-white" value={settings.clientPageExpiryDays} onChange={event => setSettings(current => ({ ...current, clientPageExpiryDays: Number(event.target.value) || 1 }))} />
+                </SettingsField>
+                <SettingsField label="Watermark label" helper="Shown on client-facing evidence exports.">
+                  <input className="mt-2 w-full rounded-lg border border-white/10 bg-[#0B172A] px-3 py-2 text-sm font-black text-white" value={settings.watermarkLabel} onChange={event => setSettings(current => ({ ...current, watermarkLabel: event.target.value }))} />
+                </SettingsField>
+                <SettingToggle label="Published evidence only" text="Hide rejected, pending and internal notes from client pages." enabled={settings.proofPublishPolicy === 'Approved evidence only'} onToggle={() => setSettings(current => ({ ...current, proofPublishPolicy: current.proofPublishPolicy === 'Approved evidence only' ? 'Reviewer-controlled publishing' : 'Approved evidence only' }))} />
+                <SettingToggle label="Access log enabled" text="Track viewer count, last view and export history." enabled={settings.clientAccessLog} onToggle={() => setToggle('clientAccessLog')} />
+              </div>
+              <div className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+                <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Current share coverage</p>
+                <p className="mt-2 text-3xl font-black text-white">{liveClientPages.length}</p>
+                <p className="mt-1 text-sm text-[#9DB4D0]">Live secure client evidence pages.</p>
+                <div className="mt-4 grid gap-2">
+                  {data.clientPages.slice(0, 3).map(page => (
+                    <div key={page.token} className="rounded-lg border border-white/10 bg-[#0B172A] p-3">
+                      <p className="text-sm font-black text-white">{page.title}</p>
+                      <p className="mt-1 text-xs text-[#9DB4D0]">{page.client} - expires {formatDate(page.expiresAt)}</p>
+                    </div>
+                  ))}
+                </div>
+                <button type="button" className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={onOpenClientPages}>
+                  Open Client Pages <ExternalLink size={14} />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {section === 'permits' && (
+            <div className="mt-5 grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+              <div className="space-y-3">
+                <SettingsField label="Permit alert window" helper="Days before expiry when assets enter permit watch.">
+                  <input type="number" min={1} max={180} className="mt-2 w-full rounded-lg border border-white/10 bg-[#0B172A] px-3 py-2 text-sm font-black text-white" value={settings.permitAlertDays} onChange={event => setSettings(current => ({ ...current, permitAlertDays: Number(event.target.value) || 1 }))} />
+                </SettingsField>
+                <SettingToggle label="Block publish on expired permit" text="Prevent expired-permit assets from client evidence pages." enabled={settings.blockExpiredPermitPublish} onToggle={() => setToggle('blockExpiredPermitPublish')} />
+                <button type="button" className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={onOpenEvidence}>
+                  Open Compliance Review <ExternalLink size={14} />
+                </button>
+              </div>
+              <div className="grid gap-3">
+                {permitWatchAssets.length ? permitWatchAssets.map(asset => (
+                  <div key={asset.id} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-black text-white">{asset.name}</p>
+                        <p className="mt-1 text-xs text-[#9DB4D0]">{asset.market} - {asset.route} - expires {formatDate(asset.permitExpiry)}</p>
+                      </div>
+                      <Pill>{asset.permitStatus}</Pill>
+                    </div>
+                  </div>
+                )) : (
+                  <div className="rounded-lg border border-emerald-400/25 bg-emerald-400/10 p-4 text-sm font-black text-emerald-100">All tracked permits are clear.</div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {section === 'integrations' && (
+            <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+              <div className="grid gap-3 md:grid-cols-2">
+                {integrationFeeds.map(feed => (
+                  <div key={feed.name} className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-black text-white">{feed.name}</p>
+                        <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{feed.source}</p>
+                      </div>
+                      <Pill>{feed.status}</Pill>
+                    </div>
+                    <p className="mt-3 text-xs font-bold text-[#7EB8F7]">Last sync {feed.at}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+                <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Feed policy</p>
+                <div className="mt-3 grid gap-2">
+                  {['ERP asset master cannot overwrite approved proof.', 'Media booking controls campaign and flight context.', 'Player/ad-server feeds inform DOOH readiness only.', 'Document repository stores permits, NOCs and evidence packs.'].map(rule => (
+                    <div key={rule} className="flex gap-2 rounded-lg border border-white/10 bg-[#0B172A] p-3 text-sm leading-6 text-[#D8E6F8]">
+                      <CheckCircle2 size={16} className="mt-1 shrink-0 text-emerald-200" />
+                      <span>{rule}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {section === 'access' && (
+            <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+              <div className="grid gap-3">
+                {roles.map(([role, scope, guard]) => (
+                  <div key={role} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
+                    <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                      <div>
+                        <p className="text-sm font-black text-white">{role}</p>
+                        <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{scope}</p>
+                      </div>
+                      <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">RBAC</Pill>
+                    </div>
+                    <p className="mt-2 text-xs font-bold text-[#7EB8F7]">{guard}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="space-y-3">
+                <SettingToggle label="SSO enabled" text="Use identity provider sign-in for internal platform users." enabled={settings.ssoEnabled} onToggle={() => setToggle('ssoEnabled')} />
+                <SettingToggle label="Vendor assignment gate" text="Block external crews without approved role, market and evidence permissions." enabled={settings.vendorGate} onToggle={() => setToggle('vendorGate')} />
+                <button type="button" className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={onOpenVendors}>
+                  Open Vendor IQ <ExternalLink size={14} />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function AssetLocationModal({
+  asset,
+  onClose,
+  onOpenGIS,
+  onAssignSurvey,
+}: {
+  asset: OOHAsset | null;
+  onClose: () => void;
+  onOpenGIS: (asset: OOHAsset) => void;
+  onAssignSurvey: (asset: OOHAsset) => void;
+}) {
+  if (!asset) return null;
+  const latestSurvey = [...asset.surveyHistory].sort((a, b) => Date.parse(b.date) - Date.parse(a.date))[0];
+  const locationRows = [
+    { label: 'GPS lock', value: `${asset.lat.toFixed(5)}, ${asset.lng.toFixed(5)}`, helper: 'Survey and map verification' },
+    { label: 'Address', value: asset.address, helper: 'Crew navigation point' },
+    { label: 'Route', value: asset.route, helper: 'Media route / corridor' },
+    { label: 'Market', value: asset.market, helper: 'Operating market' },
+    { label: 'Format', value: asset.format, helper: asset.dimensions },
+    { label: 'Owner / site', value: asset.owner, helper: 'Commercial ownership' },
+    { label: 'Permit expiry', value: formatDate(asset.permitExpiry), helper: asset.permitStatus },
+    { label: 'Latest survey', value: latestSurvey ? formatDate(latestSurvey.date) : 'No survey yet', helper: latestSurvey ? `${latestSurvey.score} score - ${latestSurvey.status}` : 'Assign inspection' },
+  ];
+  const operatingRows = [
+    { label: 'Install', value: asset.installStatus, icon: CheckCircle2 },
+    { label: 'Evidence', value: asset.evidenceStatus, icon: Camera },
+    { label: 'Permit', value: asset.permitStatus, icon: ShieldCheck },
+    { label: 'Health', value: String(asset.healthScore), icon: BarChart3 },
+  ];
+  const nextAction = asset.evidenceStatus === 'Rejected'
+    ? 'Evidence was rejected. Reassign a focused photo inspection and keep the asset out of client proof until approved.'
+    : asset.evidenceStatus === 'Missing'
+      ? 'No approved proof is attached. Send the field team to capture QR, GPS and photo evidence.'
+      : asset.evidenceStatus === 'Pending'
+        ? 'Captured proof is waiting for reviewer decision. Open the workbench and approve or request rework.'
+        : 'Location, permit and proof are ready for client evidence sharing.';
+
+  return (
+    <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" role="presentation" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`asset-location-${asset.id}`}
+        className="max-h-[92vh] w-full max-w-6xl overflow-hidden rounded-lg border border-[#2E7FFF]/35 bg-[#081426] shadow-2xl shadow-black/50"
+        onClick={event => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-white/10 bg-[#0B172A] p-4">
+          <div className="min-w-0">
+            <p className="text-[11px] font-black uppercase tracking-[0.2em] text-[#7EB8F7]">Asset location intelligence</p>
+            <h3 id={`asset-location-${asset.id}`} className="mt-1 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{asset.name}</h3>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-[#9DB4D0]">
+              <span>{asset.id}</span>
+              <span className="h-1 w-1 rounded-full bg-[#7A94B4]" />
+              <span>{asset.market}</span>
+              <span className="h-1 w-1 rounded-full bg-[#7A94B4]" />
+              <span>{assetFlight(asset)}</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label="Close asset location attributes"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-[#B8C7DB] hover:bg-white/10 hover:text-white"
+            onClick={onClose}
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="custom-scrollbar max-h-[calc(92vh-92px)] space-y-4 overflow-y-auto p-4">
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_360px]">
+            <div className="relative h-[320px] overflow-hidden rounded-lg border border-blue-300/20 bg-[#07111F]">
+              <MapContainer key={asset.id} center={[asset.lat, asset.lng]} zoom={13} scrollWheelZoom={true} className="h-full w-full ooh-modern-map">
+                <TileLayer {...modernMapTiles} />
+                <CircleMarker
+                  center={[asset.lat, asset.lng]}
+                  radius={13}
+                  pathOptions={{ color: markerColor(asset), fillColor: markerColor(asset), fillOpacity: 0.9, weight: 3 }}
+                >
+                  <Popup>
+                    <div className="w-64 p-2 text-left">
+                      <span className="block text-xs font-black uppercase tracking-wide text-[#7A94B4]">{asset.id}</span>
+                      <strong className="mt-1 block text-sm text-[#EEF3FA]">{asset.name}</strong>
+                      <p className="mt-1 text-xs text-[#B8C7DB]">{asset.address}</p>
+                    </div>
+                  </Popup>
+                </CircleMarker>
+              </MapContainer>
+              <div className="absolute bottom-3 left-3 right-3 z-[500] rounded-lg border border-white/10 bg-[#07111F]/90 p-3 shadow-xl shadow-black/30 backdrop-blur">
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-[#7A94B4]">Pinned location</p>
+                <p className="mt-1 text-lg font-black text-white">{asset.route}</p>
+                <p className="mt-1 text-sm leading-5 text-[#B8C7DB]">{asset.address}</p>
+              </div>
+            </div>
+
+            <aside className="flex flex-col gap-3 rounded-lg border border-white/10 bg-[#07111F] p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Operator action</p>
+                  <p className="mt-1 text-xl font-black text-white">{actionState(asset)}</p>
+                </div>
+                <div className={`rounded-lg bg-white/5 px-3 py-2 text-center ${scoreTone(asset.healthScore)}`}>
+                  <div className="text-3xl font-black">{asset.healthScore}</div>
+                  <div className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Health</div>
+                </div>
+              </div>
+              <p className="rounded-lg border border-blue-300/20 bg-blue-300/10 p-3 text-sm leading-6 text-blue-100">{nextAction}</p>
+              <div className="grid grid-cols-2 gap-2">
+                {operatingRows.map(row => {
+                  const Icon = row.icon;
+                  return (
+                    <div key={row.label} className="rounded-lg border border-white/10 bg-[#0B172A] p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{row.label}</p>
+                        <Icon size={14} className="text-[#7EB8F7]" />
+                      </div>
+                      <p className={`mt-2 text-sm font-black ${row.label === 'Health' ? scoreTone(asset.healthScore) : 'text-white'}`}>{row.value}</p>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="mt-auto grid gap-2">
+              <button
+                type="button"
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-sm font-black text-white hover:bg-[#4C91FF]"
+                onClick={() => onOpenGIS(asset)}
+              >
+                Open In GIS <ExternalLink size={14} />
+              </button>
+              <button
+                type="button"
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-black text-white hover:bg-white/10"
+                onClick={() => onAssignSurvey(asset)}
+              >
+                Assign Survey <ClipboardCheck size={14} />
+              </button>
+              </div>
+            </aside>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {locationRows.map(row => (
+              <div key={row.label} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
+                <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{row.label}</p>
+                <p className="mt-1 text-sm font-black leading-5 text-white">{row.value}</p>
+                <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{row.helper}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+            <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Location attributes</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {asset.attributes.map(attribute => (
+                <span key={attribute} className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs font-bold text-[#B8C7DB]">{attribute}</span>
+              ))}
+            </div>
+            <p className="mt-4 rounded-lg border border-blue-300/20 bg-blue-300/10 p-3 text-sm leading-6 text-blue-100">{asset.audienceReference ?? 'GIS/GPS verified OOH location with market and route attributes.'}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AssetProfile({
+  asset,
+  latestSubmission,
+  onPatch,
+  onOpenLocation,
+  onOpenGIS,
+  onAssignSurvey,
+  onReviewProof,
+  onOpenWorkOrders,
+  onOpenClientPages,
+}: {
+  asset: OOHAsset;
+  latestSubmission?: OOHSubmission;
+  onPatch: (updates: Partial<OOHAsset>) => void;
+  onOpenLocation: () => void;
+  onOpenGIS: () => void;
+  onAssignSurvey: () => void;
+  onReviewProof: () => void;
+  onOpenWorkOrders: () => void;
+  onOpenClientPages: () => void;
+}) {
+  const latestSurvey = [...asset.surveyHistory].sort((a, b) => Date.parse(b.date) - Date.parse(a.date))[0];
+  const workOrderStatus = workOrderStatusForAsset(asset);
+  const artwork = artworkForAsset(asset);
+  const nextAction = nextWorkOrderAction(asset, workOrderStatus);
+  const futureBooking = futureBookingsForAsset(asset)[0];
+  const inspectionResult = latestSurvey
+    ? `${formatDate(latestSurvey.date)} - score ${latestSurvey.score}; checklist ${latestSurvey.status.toLowerCase()}`
+    : 'No inspection submitted yet';
+  const proofDecision = asset.evidenceStatus === 'Ready'
+    ? 'Approved for client page'
+    : asset.evidenceStatus === 'Rejected'
+      ? 'Rejected for client proof'
+      : asset.evidenceStatus === 'Pending'
+        ? 'Pending reviewer decision'
+        : 'Missing proof capture';
+  const evidencePackageState = latestSubmission
+    ? `${proofDecision} - survey score ${latestSubmission.score}`
+    : asset.evidenceStatus === 'Missing'
+      ? 'No proof package submitted'
+      : `${proofDecision} - no linked submission`;
+  const inspectorRows = [
+    ['Campaign', asset.campaign],
+    ['Client', asset.client],
     ['Format', asset.format],
     ['Dimensions', asset.dimensions],
     ['Market', asset.market],
     ['Route', asset.route],
-    ['Owner/Site', asset.owner],
+    ['Permit', `${asset.permitStatus} - ${formatDate(asset.permitExpiry)}`],
+    ['Install', asset.installStatus],
+    ['Client proof decision', proofDecision],
+    ['Inspection result', inspectionResult],
+    ['Evidence package', evidencePackageState],
     ['Buyer', asset.buyerContact ?? 'Client contact pending'],
-    ['Permit expiry', formatDate(asset.permitExpiry)],
-    ['Install SLA', asset.installSla ?? 'SLA pending'],
-    ['Proof SLA', asset.proofSla ?? 'Evidence review pending'],
-    ['Power', asset.powerStatus],
-    ['Player', asset.playerStatus],
-    ['Uptime', `${asset.playerUptime ?? 100}%`],
-    ['Illumination', asset.illumination],
-    ['GPS', `${asset.lat.toFixed(4)}, ${asset.lng.toFixed(4)}`],
   ];
 
   return (
-    <aside className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-[#7A94B4]">{asset.id}</p>
-          <h3 className="mt-1 text-xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{asset.name}</h3>
-          <p className="mt-2 text-sm text-[#9DB4D0]">{asset.address}</p>
-        </div>
-        <div className={`rounded-lg px-3 py-2 text-center ${scoreTone(asset.healthScore)} bg-white/5`}>
-          <div className="text-2xl font-black">{asset.healthScore}</div>
-          <div className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Health</div>
-        </div>
-      </div>
+    <aside className="overflow-hidden rounded-lg border border-white/10 bg-[#0B172A] shadow-xl shadow-black/10">
+      <AssetPopupVisual asset={asset} className="h-48 w-full" />
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        <Pill>{asset.status}</Pill>
-        <Pill>{asset.evidenceStatus}</Pill>
-        <Pill>{asset.permitStatus}</Pill>
-      </div>
-
-      <div className="mt-5 grid gap-2 sm:grid-cols-3">
-        <div className="rounded-lg border border-emerald-400/20 bg-emerald-400/10 p-3">
-          <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-100">Campaign flight</p>
-          <p className="mt-1 text-sm font-black text-white">{assetFlight(asset)}</p>
-        </div>
-        <div className="rounded-lg border border-red-400/20 bg-red-400/10 p-3">
-          <p className="text-[10px] font-bold uppercase tracking-wide text-red-100">Action state</p>
-          <p className="mt-1 text-sm font-black text-white">{actionState(asset)}</p>
-        </div>
-        <div className="rounded-lg border border-blue-400/20 bg-blue-400/10 p-3">
-          <p className="text-[10px] font-bold uppercase tracking-wide text-blue-100">Client view</p>
-          <p className="mt-1 text-sm font-black text-white">{getLastClientView(asset)}</p>
-        </div>
-      </div>
-
-      <div className="mt-5 grid grid-cols-2 gap-2">
-        {attributeRows.map(([label, value]) => (
-          <div key={label} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">{label}</p>
-            <p className="mt-1 text-sm font-bold text-[#EEF3FA]">{value}</p>
+      <div className="p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-[#7A94B4]">{asset.id}</p>
+            <h3 className="mt-1 text-xl font-black leading-7 text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{asset.name}</h3>
+            <p className="mt-2 text-sm leading-6 text-[#9DB4D0]">{asset.address}</p>
           </div>
-        ))}
-      </div>
+          <div className={`shrink-0 rounded-lg px-3 py-2 text-center ${scoreTone(asset.healthScore)} bg-white/5`}>
+            <div className="text-2xl font-black">{asset.healthScore}</div>
+            <div className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Health</div>
+          </div>
+        </div>
 
-      <div className="mt-4 rounded-lg border border-white/10 bg-[#07111F] p-3">
-        <p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Audience and location reference</p>
-        <p className="mt-1 text-sm leading-5 text-[#B8C7DB]">{asset.audienceReference ?? 'GIS/GPS verified OOH unit with market and route attributes.'}</p>
-      </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Pill>{asset.status}</Pill>
+          <Pill>{asset.evidenceStatus}</Pill>
+          <Pill>{asset.permitStatus}</Pill>
+          <Pill tone={workOrderStatusTone(workOrderStatus)}>{workOrderStatus}</Pill>
+        </div>
 
-      <div className="mt-5">
-        <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#7A94B4]">Lifecycle</p>
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          <button className="rounded-lg bg-emerald-400/12 px-3 py-2 text-sm font-bold text-emerald-100" onClick={() => onPatch({ status: 'Live', installStatus: 'Installed', evidenceStatus: 'Ready' })}>
-            Mark Installed
-          </button>
-          <button className="rounded-lg bg-red-400/12 px-3 py-2 text-sm font-bold text-red-100" onClick={() => onPatch({ status: 'Issue', installStatus: 'Needs Visit', evidenceStatus: 'Rejected' })}>
-            Flag Issue
-          </button>
-          <button className="rounded-lg bg-blue-400/12 px-3 py-2 text-sm font-bold text-blue-100" onClick={onAssignSurvey}>
-            Assign Survey
-          </button>
-          <button className="rounded-lg bg-white/8 px-3 py-2 text-sm font-bold text-white" onClick={() => onPatch({ permitStatus: 'Valid', permitExpiry: new Date(Date.now() + 365 * 86400000).toISOString() })}>
-            Renew Permit
-          </button>
+        <div className="mt-5 rounded-lg border border-amber-300/20 bg-amber-300/10 p-3">
+          <p className="text-[10px] font-black uppercase tracking-wide text-amber-100">Operator next action</p>
+          <p className="mt-2 text-sm leading-6 text-white">{nextAction}</p>
+        </div>
+
+        <div className="mt-4 grid gap-2 sm:grid-cols-3">
+          <div className="rounded-lg border border-emerald-400/20 bg-emerald-400/10 p-3">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-100">Campaign flight</p>
+            <p className="mt-1 text-sm font-black text-white">{assetFlight(asset)}</p>
+          </div>
+          <div className="rounded-lg border border-red-400/20 bg-red-400/10 p-3">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-red-100">Action state</p>
+            <p className="mt-1 text-sm font-black text-white">{actionState(asset)}</p>
+          </div>
+          <div className="rounded-lg border border-blue-400/20 bg-blue-400/10 p-3">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-blue-100">Client view</p>
+            <p className="mt-1 text-sm font-black text-white">{getLastClientView(asset)}</p>
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          {inspectorRows.map(([label, value]) => (
+            <div key={label} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">{label}</p>
+              <p className="mt-1 text-sm font-bold leading-5 text-[#EEF3FA]">{value}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-4 rounded-lg border border-white/10 bg-[#07111F] p-3">
+          <p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Artwork and next booking</p>
+          <p className="mt-1 text-sm font-black text-white">{artwork.title}</p>
+          <p className="mt-1 break-all font-mono text-xs text-[#B8C7DB]">{artwork.file}</p>
+          <p className="mt-2 text-xs leading-5 text-[#9DB4D0]">{futureBooking}</p>
+        </div>
+
+        <div className="mt-4 rounded-lg border border-white/10 bg-[#07111F] p-3">
+          <p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Audience and location reference</p>
+          <p className="mt-1 text-sm leading-5 text-[#B8C7DB]">{asset.audienceReference ?? 'GIS/GPS verified OOH unit with market and route attributes.'}</p>
+        </div>
+
+        <div className="mt-5">
+          <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#7A94B4]">Inspector actions</p>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button type="button" className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold text-white hover:bg-white/10" onClick={onOpenLocation}>
+              <MapPin size={14} /> Location & Map
+            </button>
+            <button type="button" className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold text-white hover:bg-white/10" onClick={onOpenGIS}>
+              <Globe2 size={14} /> GIS Layer
+            </button>
+            <button type="button" className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-400/12 px-3 py-2 text-sm font-bold text-blue-100 hover:bg-blue-400/18" onClick={onAssignSurvey}>
+              <ClipboardCheck size={14} /> Assign Survey
+            </button>
+            <button type="button" className="inline-flex items-center justify-center gap-2 rounded-lg bg-amber-300/12 px-3 py-2 text-sm font-bold text-amber-100 hover:bg-amber-300/18" onClick={onReviewProof}>
+              <Camera size={14} /> Review Proof
+            </button>
+            <button type="button" className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold text-white hover:bg-white/10" onClick={onOpenWorkOrders}>
+              <FileSearch size={14} /> Work Order
+            </button>
+            <button type="button" className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold text-white hover:bg-white/10" onClick={onOpenClientPages}>
+              <Globe2 size={14} /> Client Page
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-5">
+          <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#7A94B4]">Lifecycle controls</p>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button className="rounded-lg bg-emerald-400/12 px-3 py-2 text-sm font-bold text-emerald-100 hover:bg-emerald-400/18" onClick={() => onPatch({ status: 'Live', installStatus: 'Installed', evidenceStatus: 'Ready' })}>
+              Mark Installed
+            </button>
+            <button className="rounded-lg bg-red-400/12 px-3 py-2 text-sm font-bold text-red-100 hover:bg-red-400/18" onClick={() => onPatch({ status: 'Issue', installStatus: 'Needs Visit', evidenceStatus: 'Rejected' })}>
+              Flag Issue
+            </button>
+            <button className="rounded-lg bg-white/8 px-3 py-2 text-sm font-bold text-white hover:bg-white/12" onClick={() => onPatch({ permitStatus: 'Valid', permitExpiry: new Date(Date.now() + 365 * 86400000).toISOString() })}>
+              Renew Permit
+            </button>
+            <button className="rounded-lg bg-white/8 px-3 py-2 text-sm font-bold text-white hover:bg-white/12" onClick={onOpenClientPages}>
+              Share Control
+            </button>
+          </div>
         </div>
       </div>
     </aside>
@@ -943,7 +4322,7 @@ function AssetProfile({ asset, onPatch, onAssignSurvey }: { asset: OOHAsset; onP
 
 export function OOHOperatorApp() {
   const [data, setData] = useState<OOHBootstrap>(fallbackOOHBootstrap);
-  const [activeTab, setActiveTab] = useState<OOHTab>('Command');
+  const [activeTab, setActiveTab] = useState<OOHTab>(getInitialOOHTab);
   const [selectedAssetId, setSelectedAssetId] = useState(fallbackOOHBootstrap.assets[0]?.id ?? '');
   const [assetForm, setAssetForm] = useState<AssetForm>(buildNewAssetForm);
   const [assignmentForm, setAssignmentForm] = useState<AssignmentForm>(buildAssignmentForm(fallbackOOHBootstrap.assets[0]?.id ?? ''));
@@ -952,7 +4331,22 @@ export function OOHOperatorApp() {
   const [busy, setBusy] = useState(false);
   const [activeMetricId, setActiveMetricId] = useState('proof-gap');
   const [metricModalId, setMetricModalId] = useState<string | null>(null);
+  const [locationAssetId, setLocationAssetId] = useState<string | null>(null);
   const [highlightSubmissionId, setHighlightSubmissionId] = useState('');
+  const [assetModalOpen, setAssetModalOpen] = useState(false);
+  const [assetIntakeMode, setAssetIntakeMode] = useState<AssetIntakeMode>('choice');
+  const [bulkAssetRows, setBulkAssetRows] = useState<BulkAssetPreview[]>([]);
+  const [bulkFileName, setBulkFileName] = useState('');
+  const [bulkUploadError, setBulkUploadError] = useState('');
+  const [campaignModalOpen, setCampaignModalOpen] = useState(false);
+  const [campaignStep, setCampaignStep] = useState<CampaignWizardStep>(1);
+  const [campaignForm, setCampaignForm] = useState<CampaignForm>(() => buildCampaignForm(fallbackOOHBootstrap.assets[0]));
+  const [campaignArtworkUpload, setCampaignArtworkUpload] = useState<CampaignArtworkUpload | null>(null);
+  const navigateToTab = (tab: OOHTab) => {
+    setActiveTab(tab);
+    const nextPath = oohTabPaths[tab];
+    if (window.location.pathname !== nextPath) window.history.pushState({}, '', nextPath);
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -962,6 +4356,7 @@ export function OOHOperatorApp() {
       const firstAssetId = store.assets[0]?.id ?? '';
       setSelectedAssetId(current => store.assets.some(asset => asset.id === current) ? current : firstAssetId);
       setAssignmentForm(current => ({ ...current, assetId: current.assetId || firstAssetId }));
+      setCampaignForm(current => current.assetId ? current : buildCampaignForm(store.assets[0]));
     });
     return () => {
       mounted = false;
@@ -969,17 +4364,34 @@ export function OOHOperatorApp() {
   }, []);
 
   useEffect(() => {
-    if (!metricModalId) return undefined;
+    if (!metricModalId && !locationAssetId && !assetModalOpen && !campaignModalOpen) return undefined;
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setMetricModalId(null);
+        setLocationAssetId(null);
+        setAssetModalOpen(false);
+        setCampaignModalOpen(false);
       }
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [metricModalId]);
+  }, [metricModalId, locationAssetId, assetModalOpen, campaignModalOpen]);
 
   const selectedAsset = data.assets.find(asset => asset.id === selectedAssetId) ?? data.assets[0];
+  const locationAsset = locationAssetId ? data.assets.find(asset => asset.id === locationAssetId) ?? null : null;
+  const campaignAsset = data.assets.find(asset => asset.id === campaignForm.assetId) ?? selectedAsset;
+  const campaignDuration = Number.isFinite(Date.parse(campaignForm.bookedFrom)) && Number.isFinite(Date.parse(campaignForm.bookedTo))
+    ? Math.max(1, Math.ceil((Date.parse(campaignForm.bookedTo) - Date.parse(campaignForm.bookedFrom)) / 86400000) + 1)
+    : 0;
+  const clientOptions = useMemo(() => Array.from(new Set([
+    ...data.assets.map(asset => asset.client),
+    ...data.clientPages.map(page => page.client),
+  ].map(client => client.trim()).filter(Boolean))), [data.assets, data.clientPages]);
+  const installationTeamOptions = useMemo(() => Array.from(new Set([
+    ...defaultInstallationTeams,
+    ...data.assignments.map(assignment => assignment.team),
+    ...data.assets.map(asset => assetAttributeValue(asset, 'Install owner') ?? ''),
+  ].map(team => team.trim()).filter(Boolean))), [data.assignments, data.assets]);
   const filteredAssets = useMemo(() => data.assets.filter(asset => {
     const matchesMarket = marketFilter === 'All markets' || asset.market === marketFilter;
     const haystack = `${asset.id} ${asset.name} ${asset.format} ${asset.route} ${asset.client} ${asset.campaign}`.toLowerCase();
@@ -993,10 +4405,13 @@ export function OOHOperatorApp() {
     const now = Date.now();
     const proofGapAssets = data.assets.filter(asset => asset.evidenceStatus !== 'Ready');
     const firstProofGapSubmission = pendingSubmissions.find(submission => proofGapAssets.some(asset => asset.id === submission.assetId));
-    const surveyCurrentAssets = data.assets.filter(asset => Number.isFinite(Date.parse(asset.nextSurveyDue)) && Date.parse(asset.nextSurveyDue) >= now);
-    const surveyAttentionAssets = data.assets
-      .filter(asset => !Number.isFinite(Date.parse(asset.nextSurveyDue)) || Date.parse(asset.nextSurveyDue) <= now + 3 * 86400000)
+    const surveyOverdueAssets = data.assets
+      .filter(asset => !Number.isFinite(Date.parse(asset.nextSurveyDue)) || Date.parse(asset.nextSurveyDue) < now)
       .sort((a, b) => Date.parse(a.nextSurveyDue) - Date.parse(b.nextSurveyDue));
+    const surveyDueSoonAssets = data.assets
+      .filter(asset => Number.isFinite(Date.parse(asset.nextSurveyDue)) && Date.parse(asset.nextSurveyDue) >= now && Date.parse(asset.nextSurveyDue) <= now + 3 * 86400000)
+      .sort((a, b) => Date.parse(a.nextSurveyDue) - Date.parse(b.nextSurveyDue));
+    const surveyAttentionAssets = [...surveyOverdueAssets, ...surveyDueSoonAssets];
     const gisReadyAssets = data.assets.filter(asset => (
       Number.isFinite(asset.lat)
       && Number.isFinite(asset.lng)
@@ -1067,44 +4482,51 @@ export function OOHOperatorApp() {
       },
       {
         id: 'survey-freshness',
-        label: 'Survey Freshness',
-        value: `${percent(surveyCurrentAssets.length, totalAssets)}%`,
-        note: `${surveyCurrentAssets.length}/${totalAssets} assets are not overdue for their next inspection.`,
+        label: 'Overdue Surveys',
+        value: surveyOverdueAssets.length,
+        note: surveyOverdueAssets.length
+          ? `${surveyOverdueAssets.length} assets are overdue for inspection; ${surveyDueSoonAssets.length} more are due within 3 days.`
+          : `${surveyDueSoonAssets.length} assets are due within 3 days; none are overdue.`,
         icon: ClipboardCheck,
-        tone: surveyCurrentAssets.length === totalAssets ? 'green' : 'amber',
-        formula: `Assets with next survey due today or later, divided by total assets. Current calculation: ${surveyCurrentAssets.length} / ${totalAssets}.`,
+        tone: surveyOverdueAssets.length ? 'red' : surveyDueSoonAssets.length ? 'amber' : 'green',
+        formula: `Count assets where the next survey due date is missing or earlier than today. Current calculation: ${surveyOverdueAssets.length} overdue out of ${totalAssets} assets.`,
         deepDive: 'This tells the operator whether the network is being inspected often enough over time. It is more useful than a generic health average because it exposes stale sites before the client asks for fresh evidence.',
         painPoint: 'Stale inspections create blind spots: damage, creative mismatch, player failure, or missing proof can sit unnoticed until the client asks for fresh evidence.',
         rootCause: 'Recurring survey coverage is too close to the due window or not scheduled far enough ahead for some assets.',
         solutionSteps: ['Open the survey queue and assign recurring inspections for due assets.', 'Prioritize assets tied to active campaigns or client proof pages.', 'Use QR, GPS, photo categories and signature rules so every visit produces usable evidence.'],
         signals: ['asset.lastSurveyAt', 'asset.nextSurveyDue', 'survey recurrence', 'assignment status'],
-        records: surveyAttentionAssets.slice(0, 9).map(asset => assetMetricRecord(
-          asset,
-          `Next survey ${formatDate(asset.nextSurveyDue)}`,
-          'Surveys',
-          'Assign Recurring Survey',
-          undefined,
-          {
-            urgency: Date.parse(asset.nextSurveyDue) < now ? 'Critical' : 'Attention',
-            painPoint: Date.parse(asset.nextSurveyDue) < now
-              ? 'The next inspection is overdue, so the latest condition and proof evidence may be stale.'
-              : 'The next inspection is inside the action window and should be scheduled before proof freshness drops.',
-            solution: 'Assign a recurring survey with QR scan, GPS lock, required photo evidence and reviewer ownership.',
-          },
-        )),
-        action: 'Open Surveys and assign recurring inspections for assets due now or due in the next three days.',
+        records: surveyAttentionAssets.slice(0, 9).map(asset => {
+          const dueTime = Date.parse(asset.nextSurveyDue);
+          const hasDueDate = Number.isFinite(dueTime);
+          const isOverdue = !hasDueDate || dueTime < now;
+          return assetMetricRecord(
+            asset,
+            !hasDueDate ? 'Survey due date missing' : isOverdue ? `Overdue since ${formatDate(asset.nextSurveyDue)}` : `Due ${formatDate(asset.nextSurveyDue)}`,
+            'Surveys',
+            'Assign Recurring Survey',
+            undefined,
+            {
+              urgency: isOverdue ? 'Critical' : 'Attention',
+              painPoint: isOverdue
+                ? 'The next inspection is overdue, so the latest condition and proof evidence may be stale.'
+                : 'The next inspection is inside the action window and should be scheduled before proof freshness drops.',
+              solution: 'Assign a recurring survey with QR scan, GPS lock, required photo evidence and reviewer ownership.',
+            },
+          );
+        }),
+        action: 'Open Surveys and assign recurring inspections for overdue assets first, then schedule assets due in the next three days.',
         actionLabel: 'Assign Recurring Survey',
         actionAssetId: surveyAttentionAssets[0]?.id,
         tab: 'Surveys',
       },
       {
         id: 'client-evidence-coverage',
-        label: 'Client Evidence Coverage',
-        value: `${percent(clientEvidenceAssets.length, totalAssets)}%`,
-        note: `${clientEvidenceAssets.length}/${totalAssets} assets have approved captured proof or a client-share trace.`,
+        label: 'Client Evidence Gaps',
+        value: clientGapAssets.length,
+        note: `${clientGapAssets.length} assets do not yet have client-ready proof coverage; ${clientEvidenceAssets.length} are shareable.`,
         icon: Globe2,
-        tone: clientEvidenceAssets.length === totalAssets ? 'green' : 'blue',
-        formula: `Assets with approved survey proof, or Ready assets with a live evidence page or client view trace, divided by total assets. Current calculation: ${clientEvidenceAssets.length} / ${totalAssets}.`,
+        tone: clientGapAssets.length ? 'amber' : 'green',
+        formula: `Count assets without approved survey proof, a live evidence page, or a client view trace. Current calculation: ${clientGapAssets.length} gaps out of ${totalAssets} assets.`,
         deepDive: 'This separates internal proof readiness from client-facing evidence coverage. An asset only counts when approved evidence can be shared or traced through a secure client page.',
         painPoint: 'Internal proof is not enough if the client cannot access it. Account teams lose time sending manual screenshots, files, and status updates.',
         rootCause: 'Some assets either do not have approved evidence yet or have not been added to a live client evidence page with access trace.',
@@ -1320,63 +4742,66 @@ export function OOHOperatorApp() {
     }
   };
 
+  const openAssetIntakeWizard = () => {
+    setAssetIntakeMode('choice');
+    setBulkAssetRows([]);
+    setBulkFileName('');
+    setBulkUploadError('');
+    setAssetModalOpen(true);
+  };
+
+  const closeAssetIntake = () => {
+    setAssetModalOpen(false);
+    setAssetIntakeMode('choice');
+    setBulkUploadError('');
+  };
+
   const handleCreateAsset = () => {
-    void runMutation(async () => createOOHAsset({
-      ...assetForm,
-      lat: Number(assetForm.lat),
-      lng: Number(assetForm.lng),
-      status: 'Install Due',
-      permitStatus: 'Pending',
-      installStatus: 'Scheduled',
-      evidenceStatus: 'Missing',
-      healthScore: 88,
-      owner: 'OOH Assets',
-      buyerContact: 'Client media buyer',
-      bookedFrom: new Date().toISOString(),
-      bookedTo: new Date(Date.now() + 30 * 86400000).toISOString(),
-      installSla: 'Install proof required before go-live',
-      proofSla: 'Awaiting first evidence review',
-      playerUptime: assetForm.format === 'Digital screen' ? 99.1 : 100,
-      audienceReference: `${assetForm.route} GIS point with field survey pending`,
-      illumination: assetForm.format === 'Digital screen' ? 'Digital' : 'Front-lit',
-      powerStatus: 'Online',
-      playerStatus: assetForm.format === 'Digital screen' ? 'Online' : 'Not Installed',
-      attributes: ['Imported into 4C360', 'Awaiting first field survey'],
-    }));
+    closeAssetIntake();
+    void runMutation(async () => createOOHAsset(assetPayloadFromForm(assetForm)));
     setActiveTab('GIS');
   };
 
-  const handleImportSample = () => {
-    void runMutation(async () => createOOHAsset({
-      name: 'Imported City Walk Smart Panel',
-      format: 'Street furniture',
-      dimensions: '1.8m x 1.2m digital panel',
-      market: 'Dubai',
-      route: 'City Walk pedestrian spine',
-      address: 'City Walk block B, Dubai',
-      lat: 25.2061,
-      lng: 55.2628,
-      client: 'CityPay',
-      campaign: 'Tap and Go',
-      owner: 'OOH Assets',
-      status: 'Install Due',
-      permitStatus: 'Valid',
-      installStatus: 'Scheduled',
-      evidenceStatus: 'Missing',
-      illumination: 'Digital',
-      powerStatus: 'Online',
-      playerStatus: 'Online',
-      healthScore: 90,
-      buyerContact: 'Mina Kapoor, Growth',
-      bookedFrom: new Date().toISOString(),
-      bookedTo: new Date(Date.now() + 30 * 86400000).toISOString(),
-      installSla: 'Install scheduled for campaign flight',
-      proofSla: 'Evidence due within 24h',
-      playerUptime: 99.2,
-      audienceReference: 'Pedestrian spine with digital screen exposure',
-      attributes: ['Bulk import', 'Street furniture', 'Digital player'],
-    }));
-    setActiveTab('Assets');
+  const handleBulkFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setBulkFileName(file.name);
+    setBulkUploadError('');
+    try {
+      const rows = parseBulkAssetCsv(await file.text());
+      if (!rows.length) {
+        setBulkAssetRows([]);
+        setBulkUploadError('No asset rows were found. Upload a CSV with asset name, format, dimensions, market, route, address, gps lat, gps lng, client and campaign.');
+        return;
+      }
+      setBulkAssetRows(rows);
+    } catch {
+      setBulkAssetRows([]);
+      setBulkUploadError('The file could not be read. Please use a CSV export from the asset register.');
+    }
+  };
+
+  const handleLoadPreparedBulkAssets = () => {
+    setBulkAssetRows(buildPreparedBulkAssets());
+    setBulkFileName('prepared-ooh-bulk-upload.csv');
+    setBulkUploadError('');
+  };
+
+  const handleBulkImport = () => {
+    if (!bulkAssetRows.length) {
+      setBulkUploadError('Upload a CSV or load the prepared bulk file before importing assets.');
+      return;
+    }
+    const rowsToImport = bulkAssetRows;
+    closeAssetIntake();
+    void runMutation(async () => {
+      let store = data;
+      for (const row of rowsToImport) {
+        store = await createOOHAsset(assetPayloadFromForm(row, ['Bulk upload', 'Awaiting first field survey']));
+      }
+      return store;
+    });
+    setActiveTab('GIS');
   };
 
   const handleAssetPatch = (updates: Partial<OOHAsset>) => {
@@ -1438,11 +4863,153 @@ export function OOHOperatorApp() {
     setAssignmentForm(current => ({ ...current, assetId: selectedAsset.id, name: `${selectedAsset.name} proof and condition survey` }));
     setActiveTab('Surveys');
   };
+  const openAssetLocation = (asset: OOHAsset) => {
+    setSelectedAssetId(asset.id);
+    setLocationAssetId(asset.id);
+  };
+  const openSelectedAssetLocation = () => {
+    if (!selectedAsset) return;
+    openAssetLocation(selectedAsset);
+  };
+  const openSelectedAssetInGIS = () => {
+    if (!selectedAsset) return;
+    setSelectedAssetId(selectedAsset.id);
+    setMarketFilter(selectedAsset.market);
+    setLocationAssetId(null);
+    setActiveTab('GIS');
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+  };
+  const reviewProofForSelectedAsset = () => {
+    if (!selectedAsset) return;
+    const latestSubmission = latestInspectionForAsset(selectedAsset.id, data.submissions);
+    setSelectedAssetId(selectedAsset.id);
+    setHighlightSubmissionId(latestSubmission?.id ?? '');
+    setActiveTab('Evidence');
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+  };
+  const openWorkOrderForSelectedAsset = () => {
+    if (!selectedAsset) return;
+    setSelectedAssetId(selectedAsset.id);
+    setActiveTab('Work Orders');
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+  };
+  const openClientPagesForSelectedAsset = () => {
+    if (!selectedAsset) return;
+    setSelectedAssetId(selectedAsset.id);
+    setActiveTab('Client Pages');
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+  };
+  const openLocationAssetInGIS = (asset: OOHAsset) => {
+    setSelectedAssetId(asset.id);
+    setMarketFilter(asset.market);
+    setLocationAssetId(null);
+    setActiveTab('GIS');
+  };
+  const assignSurveyFromLocation = (asset: OOHAsset) => {
+    setSelectedAssetId(asset.id);
+    setAssignmentForm(current => ({ ...current, assetId: asset.id, name: `${asset.name} proof and condition survey` }));
+    setLocationAssetId(null);
+    setActiveTab('Surveys');
+  };
+  const closeCampaignWizard = () => {
+    setCampaignModalOpen(false);
+    setCampaignStep(1);
+  };
+  const updateCampaignAsset = (assetId: string) => {
+    const asset = data.assets.find(item => item.id === assetId);
+    if (!asset) return;
+    setSelectedAssetId(asset.id);
+    setCampaignForm(buildCampaignForm(asset));
+    setCampaignArtworkUpload(null);
+  };
+  const startCampaignFlow = () => {
+    const asset = selectedAsset ?? data.assets[0];
+    setCampaignForm(buildCampaignForm(asset));
+    setCampaignArtworkUpload(null);
+    setCampaignStep(1);
+    setCampaignModalOpen(true);
+  };
+  const handleCampaignArtworkUpload = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const typeLabel = file.type || file.name.split('.').pop()?.toUpperCase() || 'Artwork file';
+    const sizeLabel = formatFileSize(file.size);
+    const uploadedAt = new Date().toISOString();
+    setCampaignArtworkUpload({
+      name: file.name,
+      type: typeLabel,
+      sizeLabel,
+      uploadedAt,
+    });
+    setCampaignForm(current => ({
+      ...current,
+      artworkFile: file.name,
+      artworkTitle: current.artworkTitle.trim() ? current.artworkTitle : fileTitle(file.name),
+      artworkSpec: `${campaignAsset?.dimensions ?? 'Asset dimensions'} - ${typeLabel} - ${sizeLabel}`,
+    }));
+    event.target.value = '';
+  };
+  const handleStartCampaign = () => {
+    const asset = data.assets.find(item => item.id === campaignForm.assetId) ?? selectedAsset;
+    if (!asset) return;
+    const bookedFrom = new Date(`${campaignForm.bookedFrom}T08:00:00`).toISOString();
+    const bookedTo = new Date(`${campaignForm.bookedTo}T20:00:00`).toISOString();
+    const attributes = mergeAssetAttributes(asset, {
+      'Artwork title': campaignForm.artworkTitle,
+      'Artwork file': campaignForm.artworkFile,
+      'Artwork spec': campaignForm.artworkSpec,
+      'Artwork state': 'Artwork commissioned',
+      'Artwork upload': campaignArtworkUpload ? `${campaignArtworkUpload.name} (${campaignArtworkUpload.sizeLabel}, ${campaignArtworkUpload.type})` : '',
+      'Install owner': campaignForm.installOwner,
+      'Installation due': campaignForm.installationDueDate,
+      'Work order assignment': campaignForm.workOrderAssignment,
+    });
+    closeCampaignWizard();
+    setSelectedAssetId(asset.id);
+    void runMutation(async () => {
+      let store = await updateOOHAsset(asset.id, {
+        campaign: campaignForm.campaign,
+        client: campaignForm.client,
+        buyerContact: campaignForm.buyerContact,
+        bookedFrom,
+        bookedTo,
+        installSla: campaignForm.installSla,
+        proofSla: campaignForm.proofSla,
+        status: asset.installStatus === 'Installed' ? 'Live' : 'Install Due',
+        installStatus: asset.installStatus === 'Installed' ? 'Installed' : 'Scheduled',
+        evidenceStatus: asset.evidenceStatus === 'Ready' ? 'Ready' : asset.evidenceStatus,
+        attributes,
+      });
+
+      if (campaignForm.workOrderAssignment !== 'Campaign booking only') {
+        const assignmentName = campaignForm.workOrderAssignment === 'Create proof survey only'
+          ? `${campaignForm.campaign} proof survey`
+          : `${campaignForm.campaign} installation work order`;
+        store = await createOOHAssignment({
+          name: assignmentName,
+          assetIds: [asset.id],
+          team: campaignForm.installOwner || 'Unassigned installation team',
+          vendor: campaignForm.installOwner || 'Assigned vendor',
+          recurrence: 'One-time',
+          dueDate: new Date(`${campaignForm.installationDueDate}T17:00:00`).toISOString(),
+          reviewer: 'Maya Haddad',
+          status: 'Active',
+          progress: 0,
+          accessRules: { qrScan: true, gpsRequired: true, photoRequired: true, signatureRequired: true },
+          questions: oohSurveyQuestions,
+        });
+      }
+
+      return store;
+    });
+    setActiveTab('Work Orders');
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+  };
 
   return (
     <div className="min-h-screen bg-[#07111F] text-[#EEF3FA]">
       <div className="flex min-h-screen">
-        <OOHSideNav activeTab={activeTab} onChange={setActiveTab} />
+        <OOHSideNav activeTab={activeTab} onChange={navigateToTab} />
         <div className="min-w-0 flex-1">
           <header className="border-b border-white/10 bg-[#081426]/95 px-4 py-4 backdrop-blur">
             <div className="mx-auto flex max-w-[1500px] flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -1452,11 +5019,11 @@ export function OOHOperatorApp() {
                 <p className="mt-2 max-w-3xl text-sm text-[#B8C7DB]">One operating flow for OOH inventory, installation evidence, field surveys, approvals and secure client proof pages.</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <button className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold text-white hover:bg-white/10" onClick={() => setActiveTab('Assets')}>
+                <button className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold text-white hover:bg-white/10" onClick={openAssetIntakeWizard}>
                   <Plus size={16} /> Add Asset
                 </button>
-                <button className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold text-white hover:bg-white/10" onClick={handleImportSample}>
-                  <UploadCloud size={16} /> Import Assets
+                <button className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold text-white hover:bg-white/10" onClick={startCampaignFlow}>
+                  <CalendarClock size={16} /> Start Campaign
                 </button>
                 <button className="inline-flex items-center gap-2 rounded-lg bg-[#E11D2E] px-3 py-2 text-sm font-bold text-white hover:bg-[#ff3445]" onClick={handleCreateClientPage} disabled={!selectedAsset || busy}>
                   <Link2 size={16} /> Share Evidence
@@ -1468,6 +5035,18 @@ export function OOHOperatorApp() {
           <main className="mx-auto max-w-[1500px] px-4 py-5">
         {activeTab === 'Command' && (
           <section className="space-y-5">
+            <LiveOperationsGisPanel
+              assets={data.assets}
+              assignments={data.assignments}
+              submissions={data.submissions}
+              selectedAssetId={selectedAssetId}
+              onSelectAsset={setSelectedAssetId}
+              onOpenGIS={() => setActiveTab('GIS')}
+              onOpenAssets={() => setActiveTab('Assets')}
+              onOpenSurveys={() => setActiveTab('Surveys')}
+              onOpenEvidence={() => setActiveTab('Evidence')}
+            />
+
             <div className="grid gap-3 lg:grid-cols-3">
               {metricInsights.slice(0, 3).map(metric => (
                 <MetricCard key={metric.id} metric={metric} selected={selectedMetric.id === metric.id} onOpen={handleMetricExplain} />
@@ -1480,61 +5059,26 @@ export function OOHOperatorApp() {
               ))}
             </div>
 
-            <div className="grid items-start gap-5 xl:grid-cols-[1.45fr_0.75fr]">
-              <LiveOperationsGisPanel
-                assets={data.assets}
-                assignments={data.assignments}
-                submissions={data.submissions}
-                selectedAssetId={selectedAssetId}
-                onSelectAsset={setSelectedAssetId}
-                onOpenGIS={() => setActiveTab('GIS')}
-                onOpenSurveys={() => setActiveTab('Surveys')}
-                onOpenEvidence={() => setActiveTab('Evidence')}
-              />
-
-              {selectedAsset && <AssetProfile asset={selectedAsset} onPatch={handleAssetPatch} onAssignSurvey={focusAssetForSurvey} />}
-            </div>
-
-            <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
-              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#7A94B4]">AI priority queue</p>
-                  <h2 className="mt-1 text-lg font-black text-white">What to fix before the next client share</h2>
-                </div>
-                <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">{`${actionBlockers} action blocker${actionBlockers === 1 ? '' : 's'}`}</Pill>
-              </div>
-              <div className="mt-4 grid gap-3 xl:grid-cols-3">
-                {metricInsights.filter(metric => metric.records.length > 0).slice(0, 3).map(metric => (
-                  <button
-                    key={metric.id}
-                    type="button"
-                    className="rounded-lg border border-white/10 bg-[#07111F] p-3 text-left hover:border-[#7EB8F7]/40"
-                    onClick={() => handleMetricExplain(metric.id)}
-                  >
-                    <p className="text-sm font-black text-white">{metric.label}</p>
-                    <p className="mt-2 text-xs leading-5 text-[#9DB4D0]">{metric.records[0]?.title} - {metric.records[0]?.detail}</p>
-                    <p className="mt-3 text-xs font-bold text-[#7EB8F7]">Open AI work queue</p>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="grid gap-5 xl:grid-cols-[1fr_0.8fr]">
+            <div className="grid items-start gap-5 xl:grid-cols-[1fr_0.85fr]">
               <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
-                <div className="mb-4 flex items-center justify-between">
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                   <div>
-                    <h2 className="text-lg font-black text-white">GIS Proof and Compliance Snapshot</h2>
-                    <p className="mt-1 text-sm text-[#9DB4D0]">Every marker carries format, permit, proof, campaign and operational context.</p>
+                    <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#7A94B4]">AI priority queue</p>
+                    <h2 className="mt-1 text-lg font-black text-white">What to fix before the next client share</h2>
                   </div>
-                  <button className="text-sm font-bold text-[#7EB8F7]" onClick={() => setActiveTab('GIS')}>Open GIS</button>
+                  <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">{`${actionBlockers} action blocker${actionBlockers === 1 ? '' : 's'}`}</Pill>
                 </div>
-                <OOHMap assets={data.assets} submissions={data.submissions} selectedAssetId={selectedAssetId} onSelect={setSelectedAssetId} />
-                <div className="mt-3 grid gap-2 md:grid-cols-3">
-                  {marketClusters.map(cluster => (
-                    <button key={cluster.market} className="rounded-lg border border-white/10 bg-[#07111F] p-3 text-left" onClick={() => { setMarketFilter(cluster.market); setActiveTab('GIS'); }}>
-                      <p className="text-sm font-black text-white">{cluster.market}</p>
-                      <p className="mt-1 text-xs text-[#9DB4D0]">{cluster.assets.length} asset{cluster.assets.length === 1 ? '' : 's'} - {cluster.proofReady} proof ready</p>
-                      <p className="mt-2 text-xs font-bold text-amber-100">{cluster.blockers} action blocker{cluster.blockers === 1 ? '' : 's'}</p>
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  {metricInsights.filter(metric => metric.records.length > 0).slice(0, 3).map(metric => (
+                    <button
+                      key={metric.id}
+                      type="button"
+                      className="rounded-lg border border-white/10 bg-[#07111F] p-3 text-left hover:border-[#7EB8F7]/40"
+                      onClick={() => handleMetricExplain(metric.id)}
+                    >
+                      <p className="text-sm font-black text-white">{metric.label}</p>
+                      <p className="mt-2 text-xs leading-5 text-[#9DB4D0]">{metric.records[0]?.title} - {metric.records[0]?.detail}</p>
+                      <p className="mt-3 text-xs font-bold text-[#7EB8F7]">Open AI work queue</p>
                     </button>
                   ))}
                 </div>
@@ -1578,7 +5122,7 @@ export function OOHOperatorApp() {
                 </div>
                 <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">Monitored feeds</Pill>
               </div>
-              <div className="mt-4 grid gap-3 lg:grid-cols-5">
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                 {integrationFeeds.map(feed => (
                   <div key={feed.name} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
                     <div className="flex items-center justify-between gap-2">
@@ -1595,8 +5139,8 @@ export function OOHOperatorApp() {
         )}
 
         {activeTab === 'Assets' && (
-          <section className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
-            <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
+          <section className="grid min-w-0 gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+            <div className="min-w-0 rounded-lg border border-white/10 bg-[#0B172A] p-4">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <h2 className="text-xl font-black text-white">OOH Asset Register</h2>
                 <div className="flex flex-wrap gap-2">
@@ -1613,40 +5157,53 @@ export function OOHOperatorApp() {
                 </div>
               </div>
 
-              <div className="mt-4 overflow-hidden rounded-lg border border-white/10">
-                <table className="w-full min-w-[920px] border-collapse text-left text-sm">
+              <div className="custom-scrollbar mt-4 max-w-full overflow-x-auto rounded-lg border border-white/10">
+                <table className="w-full min-w-[1040px] border-collapse text-left text-sm">
                   <thead className="bg-[#07111F] text-[11px] uppercase tracking-wide text-[#7A94B4]">
                     <tr>
-                      <th className="px-3 py-3">Asset</th>
-                      <th className="px-3 py-3">Market</th>
-                      <th className="px-3 py-3">Campaign</th>
-                      <th className="px-3 py-3">Readiness</th>
-                      <th className="px-3 py-3">Permit</th>
-                      <th className="px-3 py-3">Evidence</th>
-                      <th className="px-3 py-3">Health</th>
+                      <th className="px-4 py-3">Asset</th>
+                      <th className="px-4 py-3">Market</th>
+                      <th className="px-4 py-3">Campaign</th>
+                      <th className="px-4 py-3">Readiness</th>
+                      <th className="w-[124px] px-4 py-3">Permit</th>
+                      <th className="w-[132px] px-4 py-3">Evidence</th>
+                      <th className="w-[92px] px-4 py-3">Health</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredAssets.map(asset => (
-                      <tr key={asset.id} className={`border-t border-white/10 hover:bg-white/5 ${asset.id === selectedAssetId ? 'bg-[#2E7FFF]/8' : ''}`} onClick={() => setSelectedAssetId(asset.id)}>
-                        <td className="px-3 py-3">
-                          <button className="text-left">
+                      <tr
+                        key={asset.id}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Select ${asset.name} in the asset inspector`}
+                        className={`cursor-pointer border-t border-white/10 transition hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#7EB8F7] ${asset.id === selectedAssetId ? 'bg-[#2E7FFF]/8' : ''}`}
+                        onClick={() => setSelectedAssetId(asset.id)}
+                        onKeyDown={event => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            setSelectedAssetId(asset.id);
+                          }
+                        }}
+                      >
+                        <td className="px-4 py-4 align-middle">
+                          <span className="block text-left">
                             <span className="block font-black text-white">{asset.name}</span>
                             <span className="text-xs text-[#7A94B4]">{asset.id} - {asset.format} - {asset.dimensions}</span>
-                          </button>
+                          </span>
                         </td>
-                        <td className="px-3 py-3 text-[#B8C7DB]">{asset.market}</td>
-                        <td className="px-3 py-3">
+                        <td className="px-4 py-4 align-middle text-[#B8C7DB]">{asset.market}</td>
+                        <td className="px-4 py-4 align-middle">
                           <span className="block font-bold text-white">{asset.campaign}</span>
                           <span className="text-xs text-[#7A94B4]">{asset.client}</span>
                         </td>
-                        <td className="px-3 py-3">
+                        <td className="px-4 py-4 align-middle">
                           <span className="block font-bold text-white">{assetFlight(asset)}</span>
                           <span className={assetNeedsAction(asset) ? 'text-xs font-bold text-red-200' : 'text-xs font-bold text-emerald-200'}>{actionState(asset)}</span>
                         </td>
-                        <td className="px-3 py-3"><Pill>{asset.permitStatus}</Pill></td>
-                        <td className="px-3 py-3"><Pill>{asset.evidenceStatus}</Pill></td>
-                        <td className={`px-3 py-3 text-lg font-black ${scoreTone(asset.healthScore)}`}>{asset.healthScore}</td>
+                        <td className="px-4 py-4 align-middle"><Pill className="min-w-[86px]">{asset.permitStatus}</Pill></td>
+                        <td className="px-4 py-4 align-middle"><Pill className="min-w-[94px]">{asset.evidenceStatus}</Pill></td>
+                        <td className={`px-4 py-4 align-middle text-lg font-black ${scoreTone(asset.healthScore)}`}>{asset.healthScore}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1655,31 +5212,19 @@ export function OOHOperatorApp() {
             </div>
 
             <div className="space-y-5">
-              <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
-                <h2 className="text-xl font-black text-white">Add or Import OOH Asset</h2>
-                <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4] md:col-span-2">Asset name<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.name} onChange={event => setAssetForm({ ...assetForm, name: event.target.value })} /></label>
-                  <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Format<select className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.format} onChange={event => setAssetForm({ ...assetForm, format: event.target.value })}>{assetFormatOptions.map(option => <option key={option} value={option}>{option}</option>)}</select></label>
-                  <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Dimensions<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.dimensions} onChange={event => setAssetForm({ ...assetForm, dimensions: event.target.value })} /></label>
-                  <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Market<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.market} onChange={event => setAssetForm({ ...assetForm, market: event.target.value })} /></label>
-                  <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Route<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.route} onChange={event => setAssetForm({ ...assetForm, route: event.target.value })} /></label>
-                  <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4] md:col-span-2">Address<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.address} onChange={event => setAssetForm({ ...assetForm, address: event.target.value })} /></label>
-                  <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">GPS lat<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.lat} onChange={event => setAssetForm({ ...assetForm, lat: event.target.value })} /></label>
-                  <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">GPS lng<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.lng} onChange={event => setAssetForm({ ...assetForm, lng: event.target.value })} /></label>
-                  <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Client<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.client} onChange={event => setAssetForm({ ...assetForm, client: event.target.value })} /></label>
-                  <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Campaign<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.campaign} onChange={event => setAssetForm({ ...assetForm, campaign: event.target.value })} /></label>
-                </div>
-                <div className="mt-4 flex gap-2">
-                  <button className="inline-flex items-center gap-2 rounded-lg bg-[#E11D2E] px-4 py-2 text-sm font-bold text-white" onClick={handleCreateAsset} disabled={busy}>
-                    <Plus size={16} /> Add Asset
-                  </button>
-                  <button className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-white" onClick={handleImportSample} disabled={busy}>
-                    <UploadCloud size={16} /> Import Sample
-                  </button>
-                </div>
-              </div>
-
-              {selectedAsset && <AssetProfile asset={selectedAsset} onPatch={handleAssetPatch} onAssignSurvey={focusAssetForSurvey} />}
+              {selectedAsset && (
+                <AssetProfile
+                  asset={selectedAsset}
+                  latestSubmission={latestInspectionForAsset(selectedAsset.id, data.submissions)}
+                  onPatch={handleAssetPatch}
+                  onOpenLocation={openSelectedAssetLocation}
+                  onOpenGIS={openSelectedAssetInGIS}
+                  onAssignSurvey={focusAssetForSurvey}
+                  onReviewProof={reviewProofForSelectedAsset}
+                  onOpenWorkOrders={openWorkOrderForSelectedAsset}
+                  onOpenClientPages={openClientPagesForSelectedAsset}
+                />
+              )}
             </div>
           </section>
         )}
@@ -1711,7 +5256,19 @@ export function OOHOperatorApp() {
                 ))}
               </div>
             </div>
-            {selectedAsset && <AssetProfile asset={selectedAsset} onPatch={handleAssetPatch} onAssignSurvey={focusAssetForSurvey} />}
+            {selectedAsset && (
+              <AssetProfile
+                asset={selectedAsset}
+                latestSubmission={latestInspectionForAsset(selectedAsset.id, data.submissions)}
+                onPatch={handleAssetPatch}
+                onOpenLocation={openSelectedAssetLocation}
+                onOpenGIS={openSelectedAssetInGIS}
+                onAssignSurvey={focusAssetForSurvey}
+                onReviewProof={reviewProofForSelectedAsset}
+                onOpenWorkOrders={openWorkOrderForSelectedAsset}
+                onOpenClientPages={openClientPagesForSelectedAsset}
+              />
+            )}
           </section>
         )}
 
@@ -1977,6 +5534,53 @@ export function OOHOperatorApp() {
           </section>
         )}
 
+        {activeTab === 'Work Orders' && (
+          <OOHWorkOrders
+            data={data}
+            selectedAssetId={selectedAssetId}
+            onSelectAsset={setSelectedAssetId}
+            onOpenAssets={() => setActiveTab('Assets')}
+            onOpenSurveys={() => setActiveTab('Surveys')}
+            onOpenEvidence={() => setActiveTab('Evidence')}
+            onOpenClientPages={() => setActiveTab('Client Pages')}
+          />
+        )}
+
+        {activeTab === 'Obligations' && (
+          <OOHObligations
+            data={data}
+            selectedAssetId={selectedAssetId}
+            onSelectAsset={setSelectedAssetId}
+            onOpenAssets={() => navigateToTab('Assets')}
+            onOpenSurveys={() => navigateToTab('Surveys')}
+            onOpenEvidence={() => navigateToTab('Evidence')}
+            onOpenClientPages={() => navigateToTab('Client Pages')}
+            onOpenWorkOrders={() => navigateToTab('Work Orders')}
+          />
+        )}
+
+        {activeTab === 'Vendors' && (
+          <OOHVendorIntelligence
+            data={data}
+            onOpenAssets={() => setActiveTab('Assets')}
+            onOpenSurveys={() => setActiveTab('Surveys')}
+            onOpenEvidence={() => setActiveTab('Evidence')}
+            onOpenGIS={() => setActiveTab('GIS')}
+            onSelectAsset={setSelectedAssetId}
+          />
+        )}
+
+        {activeTab === 'Settings' && (
+          <OOHSettings
+            data={data}
+            onOpenGIS={() => setActiveTab('GIS')}
+            onOpenSurveys={() => setActiveTab('Surveys')}
+            onOpenEvidence={() => setActiveTab('Evidence')}
+            onOpenClientPages={() => setActiveTab('Client Pages')}
+            onOpenVendors={() => setActiveTab('Vendors')}
+          />
+        )}
+
         {activeTab === 'Reports' && (
           <section className="grid gap-5 xl:grid-cols-3">
             {reportCards.map(({ title, text, icon: Icon }) => (
@@ -1996,6 +5600,403 @@ export function OOHOperatorApp() {
           </main>
         </div>
       </div>
+      <AssetLocationModal
+        asset={locationAsset}
+        onClose={() => setLocationAssetId(null)}
+        onOpenGIS={openLocationAssetInGIS}
+        onAssignSurvey={assignSurveyFromLocation}
+      />
+      {assetModalOpen && (
+        <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" role="presentation" onClick={closeAssetIntake}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-ooh-asset-title"
+            className="max-h-[92vh] w-full max-w-4xl overflow-hidden rounded-lg border border-[#2E7FFF]/35 bg-[#081426] shadow-2xl shadow-black/50"
+            onClick={event => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 bg-[#0B172A] p-4">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#7EB8F7]">OOH asset intake</p>
+                <h2 id="add-ooh-asset-title" className="mt-1 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>
+                  {assetIntakeMode === 'choice' && 'Add OOH Assets'}
+                  {assetIntakeMode === 'single' && 'Add One OOH Asset'}
+                  {assetIntakeMode === 'bulk' && 'Bulk Upload OOH Assets'}
+                </h2>
+                <p className="mt-1 text-sm text-[#9DB4D0]">
+                  {assetIntakeMode === 'choice' && 'Choose how the operator wants to register inventory into GIS and the proof workflow.'}
+                  {assetIntakeMode === 'single' && 'Create a GIS-ready asset record with campaign, location, format and first-proof context.'}
+                  {assetIntakeMode === 'bulk' && 'Upload a CSV asset register, review the rows, then add the assets to GIS in one action.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="Close add asset"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-[#B8C7DB] hover:bg-white/10 hover:text-white"
+                onClick={closeAssetIntake}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="custom-scrollbar max-h-[calc(92vh-88px)] overflow-y-auto p-4">
+              {assetIntakeMode === 'choice' && (
+                <div className="grid gap-4 md:grid-cols-2">
+                  <button
+                    type="button"
+                    className="group min-h-[230px] rounded-lg border border-[#2E7FFF]/25 bg-[#07111F] p-5 text-left transition hover:border-[#7EB8F7]/70 hover:bg-[#0E213B]"
+                    onClick={() => setAssetIntakeMode('single')}
+                  >
+                    <span className="flex h-12 w-12 items-center justify-center rounded-lg border border-[#2E7FFF]/30 bg-[#2E7FFF]/12 text-[#9FC8FF]">
+                      <Building2 size={22} />
+                    </span>
+                    <span className="mt-5 block text-xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Add One by One</span>
+                    <span className="mt-3 block text-sm leading-6 text-[#B8C7DB]">Create a single asset record, place it on GIS, attach campaign context and send it into the first-proof workflow.</span>
+                    <span className="mt-5 inline-flex items-center gap-2 text-sm font-black text-[#7EB8F7] group-hover:text-white">
+                      Continue to form <ExternalLink size={14} />
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="group min-h-[230px] rounded-lg border border-[#2E7FFF]/25 bg-[#07111F] p-5 text-left transition hover:border-[#7EB8F7]/70 hover:bg-[#0E213B]"
+                    onClick={() => setAssetIntakeMode('bulk')}
+                  >
+                    <span className="flex h-12 w-12 items-center justify-center rounded-lg border border-emerald-300/25 bg-emerald-300/10 text-emerald-100">
+                      <UploadCloud size={22} />
+                    </span>
+                    <span className="mt-5 block text-xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Upload Bulk File</span>
+                    <span className="mt-3 block text-sm leading-6 text-[#B8C7DB]">Import a CSV asset register with GPS, route, market, client and campaign fields, then review rows before adding them.</span>
+                    <span className="mt-5 inline-flex items-center gap-2 text-sm font-black text-[#7EB8F7] group-hover:text-white">
+                      Continue to upload <ExternalLink size={14} />
+                    </span>
+                  </button>
+                </div>
+              )}
+
+              {assetIntakeMode === 'single' && (
+                <>
+                  <button
+                    type="button"
+                    className="mb-4 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-black uppercase tracking-[0.14em] text-[#9DB4D0] hover:bg-white/10 hover:text-white"
+                    onClick={() => setAssetIntakeMode('choice')}
+                  >
+                    Back to choices
+                  </button>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4] md:col-span-2">Asset name<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.name} onChange={event => setAssetForm({ ...assetForm, name: event.target.value })} /></label>
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Format<select className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.format} onChange={event => setAssetForm({ ...assetForm, format: event.target.value })}>{assetFormatOptions.map(option => <option key={option} value={option}>{option}</option>)}</select></label>
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Dimensions<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.dimensions} onChange={event => setAssetForm({ ...assetForm, dimensions: event.target.value })} /></label>
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Market<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.market} onChange={event => setAssetForm({ ...assetForm, market: event.target.value })} /></label>
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Route<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.route} onChange={event => setAssetForm({ ...assetForm, route: event.target.value })} /></label>
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4] md:col-span-2">Address<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.address} onChange={event => setAssetForm({ ...assetForm, address: event.target.value })} /></label>
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">GPS lat<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.lat} onChange={event => setAssetForm({ ...assetForm, lat: event.target.value })} /></label>
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">GPS lng<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.lng} onChange={event => setAssetForm({ ...assetForm, lng: event.target.value })} /></label>
+                    <ClientSelectWithNew label="Client" value={assetForm.client} options={clientOptions} onChange={client => setAssetForm({ ...assetForm, client })} />
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Campaign<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assetForm.campaign} onChange={event => setAssetForm({ ...assetForm, campaign: event.target.value })} /></label>
+                  </div>
+                  <div className="mt-5 flex flex-col gap-2 border-t border-white/10 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-xs leading-5 text-[#9DB4D0]">New records are placed on GIS immediately and marked for first field proof.</p>
+                    <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#E11D2E] px-4 py-2 text-sm font-bold text-white hover:bg-[#ff3445] disabled:opacity-50" onClick={handleCreateAsset} disabled={busy}>
+                      <Plus size={16} /> Add Asset
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {assetIntakeMode === 'bulk' && (
+                <>
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <button
+                      type="button"
+                      className="inline-flex w-fit items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-black uppercase tracking-[0.14em] text-[#9DB4D0] hover:bg-white/10 hover:text-white"
+                      onClick={() => setAssetIntakeMode('choice')}
+                    >
+                      Back to choices
+                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <input id="ooh-bulk-upload" type="file" accept=".csv,text/csv" className="sr-only" onChange={handleBulkFileChange} />
+                      <label htmlFor="ooh-bulk-upload" className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-[#2E7FFF]/35 bg-[#2E7FFF]/12 px-4 py-2 text-sm font-bold text-white hover:bg-[#2E7FFF]/20">
+                        <UploadCloud size={16} /> Upload CSV
+                      </label>
+                      <button type="button" className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-white hover:bg-white/10" onClick={handleLoadPreparedBulkAssets}>
+                        <FileSearch size={16} /> Load Prepared File
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 rounded-lg border border-white/10 bg-[#07111F] p-4">
+                    <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                      <div>
+                        <p className="text-xs font-black uppercase tracking-[0.16em] text-[#7A94B4]">Bulk file</p>
+                        <p className="mt-1 text-lg font-black text-white">{bulkFileName || 'No file selected'}</p>
+                      </div>
+                      <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">{`${bulkAssetRows.length} rows ready`}</Pill>
+                    </div>
+                    <p className="mt-3 text-xs leading-5 text-[#9DB4D0]">Expected CSV headers: asset name, format, dimensions, market, route, address, gps lat, gps lng, client, campaign.</p>
+                    {bulkUploadError && <p className="mt-3 rounded-lg border border-red-400/25 bg-red-400/10 px-3 py-2 text-sm font-bold text-red-100">{bulkUploadError}</p>}
+                  </div>
+
+                  <div className="mt-4 overflow-hidden rounded-lg border border-white/10">
+                    <table className="w-full min-w-[760px] border-collapse text-left text-sm">
+                      <thead className="bg-[#07111F] text-[11px] uppercase tracking-wide text-[#7A94B4]">
+                        <tr>
+                          <th className="px-3 py-3">Asset</th>
+                          <th className="px-3 py-3">Market</th>
+                          <th className="px-3 py-3">Format</th>
+                          <th className="px-3 py-3">GPS</th>
+                          <th className="px-3 py-3">Campaign</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {bulkAssetRows.slice(0, 6).map(row => (
+                          <tr key={`${row.rowNumber}-${row.name}`} className="border-t border-white/10">
+                            <td className="px-3 py-3">
+                              <span className="block font-black text-white">{row.name}</span>
+                              <span className="text-xs text-[#7A94B4]">{row.address}</span>
+                            </td>
+                            <td className="px-3 py-3 text-[#B8C7DB]">{row.market}</td>
+                            <td className="px-3 py-3 text-[#B8C7DB]">{row.format}</td>
+                            <td className="px-3 py-3 text-[#B8C7DB]">{row.lat}, {row.lng}</td>
+                            <td className="px-3 py-3">
+                              <span className="block font-bold text-white">{row.campaign}</span>
+                              <span className="text-xs text-[#7A94B4]">{row.client}</span>
+                            </td>
+                          </tr>
+                        ))}
+                        {!bulkAssetRows.length && (
+                          <tr>
+                            <td colSpan={5} className="px-3 py-8 text-center text-sm text-[#9DB4D0]">Upload a CSV or load the prepared file to preview assets before import.</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="mt-5 flex flex-col gap-2 border-t border-white/10 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-xs leading-5 text-[#9DB4D0]">{bulkAssetRows.length ? `${bulkAssetRows.length} assets will be added to GIS and marked for first proof.` : 'No assets are queued yet.'}</p>
+                    <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#E11D2E] px-4 py-2 text-sm font-bold text-white hover:bg-[#ff3445] disabled:opacity-50" onClick={handleBulkImport} disabled={busy || !bulkAssetRows.length}>
+                      <UploadCloud size={16} /> Add {bulkAssetRows.length || ''} Assets
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      {campaignModalOpen && (
+        <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" role="presentation" onClick={closeCampaignWizard}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="start-campaign-title"
+            className="max-h-[92vh] w-full max-w-5xl overflow-hidden rounded-lg border border-[#2E7FFF]/35 bg-[#081426] shadow-2xl shadow-black/50"
+            onClick={event => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 bg-[#0B172A] p-4">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#7EB8F7]">OOH campaign commissioning</p>
+                <h2 id="start-campaign-title" className="mt-1 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Start Campaign</h2>
+                <p className="mt-1 text-sm text-[#9DB4D0]">Create the campaign work order with asset, artwork, flight dates, installation owner and proof rules.</p>
+              </div>
+              <button
+                type="button"
+                aria-label="Close start campaign"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-[#B8C7DB] hover:bg-white/10 hover:text-white"
+                onClick={closeCampaignWizard}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="custom-scrollbar max-h-[calc(92vh-88px)] overflow-y-auto p-4">
+              <div className="grid gap-3 md:grid-cols-3">
+                {[
+                  [1, 'Asset & client', 'Choose the booked face and buyer'],
+                  [2, 'Artwork & flight', 'Confirm creative and campaign duration'],
+                  [3, 'Install & proof', 'Assign owner and evidence rules'],
+                ].map(([step, label, helper]) => (
+                  <button
+                    key={String(step)}
+                    type="button"
+                    className={`min-h-[112px] rounded-lg border p-5 text-left transition ${campaignStep === step ? 'border-[#2E7FFF] bg-[#102343]' : 'border-white/10 bg-[#07111F] hover:border-[#7EB8F7]/45'}`}
+                    onClick={() => setCampaignStep(step as CampaignWizardStep)}
+                  >
+                    <span className="flex items-center gap-3 text-base font-black text-white">
+                      <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${campaignStep === step ? 'bg-[#2E7FFF] text-white' : 'bg-white/8 text-[#9DB4D0]'}`}>{step}</span>
+                      {label}
+                    </span>
+                    <span className="mt-3 block text-sm leading-6 text-[#9DB4D0]">{helper}</span>
+                  </button>
+                ))}
+              </div>
+
+              {campaignStep === 1 && (
+                <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_330px]">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4] md:col-span-2">
+                      Asset
+                      <select
+                        className="mt-1 h-11 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none"
+                        value={campaignForm.assetId}
+                        onChange={event => updateCampaignAsset(event.target.value)}
+                      >
+                        {data.assets.map(asset => <option key={asset.id} value={asset.id}>{asset.name} - {asset.market}</option>)}
+                      </select>
+                    </label>
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Campaign<input className="mt-1 h-11 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={campaignForm.campaign} onChange={event => setCampaignForm({ ...campaignForm, campaign: event.target.value })} /></label>
+                    <ClientSelectWithNew label="Client" value={campaignForm.client} options={clientOptions} heightClass="h-11" onChange={client => setCampaignForm({ ...campaignForm, client })} />
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4] md:col-span-2">Buyer / brand contact<input className="mt-1 h-11 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={campaignForm.buyerContact} onChange={event => setCampaignForm({ ...campaignForm, buyerContact: event.target.value })} /></label>
+                  </div>
+
+                  <aside className="rounded-lg border border-white/10 bg-[#07111F] p-3">
+                    {campaignAsset && (
+                      <>
+                        <AssetPopupVisual asset={campaignAsset} className="h-36 w-full rounded-lg" />
+                        <p className="mt-3 text-[10px] font-black uppercase tracking-[0.16em] text-[#7A94B4]">{campaignAsset.id}</p>
+                        <h3 className="mt-1 text-lg font-black text-white">{campaignAsset.name}</h3>
+                        <p className="mt-1 text-sm text-[#9DB4D0]">{campaignAsset.route} - {campaignAsset.market}</p>
+                        <div className="mt-3 rounded-lg border border-white/10 bg-[#0B172A] p-3">
+                          <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#7A94B4]">Media specification</p>
+                          <p className="mt-1 text-sm font-black text-white">{campaignAsset.format}</p>
+                          <p className="mt-1 text-sm text-[#B8C7DB]">{campaignAsset.dimensions}</p>
+                        </div>
+                      </>
+                    )}
+                  </aside>
+                </div>
+              )}
+
+              {campaignStep === 2 && (
+                <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Start date<input type="date" className="mt-1 h-11 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={campaignForm.bookedFrom} onChange={event => setCampaignForm({ ...campaignForm, bookedFrom: event.target.value })} /></label>
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">End date<input type="date" className="mt-1 h-11 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={campaignForm.bookedTo} onChange={event => setCampaignForm({ ...campaignForm, bookedTo: event.target.value })} /></label>
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4] md:col-span-2">Artwork title<input className="mt-1 h-11 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={campaignForm.artworkTitle} onChange={event => setCampaignForm({ ...campaignForm, artworkTitle: event.target.value })} /></label>
+                    <div className="space-y-1 md:col-span-2">
+                      <p className="text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Artwork file</p>
+                      <div className="mt-1 flex flex-col gap-2 rounded-lg border border-white/10 bg-[#07111F] p-2 sm:flex-row sm:items-center">
+                        <input
+                          className="h-12 min-w-0 flex-1 rounded-lg border border-white/10 bg-[#050D18] px-4 text-sm text-white outline-none"
+                          value={campaignForm.artworkFile}
+                          onChange={event => setCampaignForm({ ...campaignForm, artworkFile: event.target.value })}
+                        />
+                        <input
+                          id="campaign-artwork-upload"
+                          type="file"
+                          accept=".pdf,.ai,.eps,.psd,.jpg,.jpeg,.png,.webp,.mp4,.mov,.zip,application/pdf,image/*,video/*"
+                          className="sr-only"
+                          onChange={handleCampaignArtworkUpload}
+                        />
+                        <label
+                          htmlFor="campaign-artwork-upload"
+                          className="inline-flex h-12 cursor-pointer items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-6 text-sm font-black text-white hover:bg-[#4C91FF]"
+                        >
+                          <UploadCloud size={16} /> Upload Artwork
+                        </label>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-[#07111F] p-3 text-xs leading-5 text-[#9DB4D0]">
+                        {campaignArtworkUpload ? (
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <span><span className="font-black text-white">{campaignArtworkUpload.name}</span> uploaded as {campaignArtworkUpload.type}</span>
+                            <span className="rounded-full border border-emerald-300/25 bg-emerald-300/10 px-2.5 py-1 font-bold text-emerald-100">{campaignArtworkUpload.sizeLabel}</span>
+                          </div>
+                        ) : (
+                          <span>Upload the final artwork, video creative, production PDF, or a packaged ZIP. The selected file name is written into the campaign work order.</span>
+                        )}
+                      </div>
+                    </div>
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4] md:col-span-2">Artwork specification<input className="mt-1 h-11 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={campaignForm.artworkSpec} onChange={event => setCampaignForm({ ...campaignForm, artworkSpec: event.target.value })} /></label>
+                  </div>
+                  <aside className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#7A94B4]">Flight summary</p>
+                    <p className="mt-3 text-4xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{campaignDuration}</p>
+                    <p className="text-sm font-bold text-[#B8C7DB]">campaign days</p>
+                    <div className="mt-4 space-y-2 text-sm text-[#D8E6F8]">
+                      <p className="rounded-lg border border-white/10 bg-[#0B172A] p-3">{campaignForm.bookedFrom || 'Start'} to {campaignForm.bookedTo || 'End'}</p>
+                      <p className="rounded-lg border border-white/10 bg-[#0B172A] p-3">{campaignAsset?.dimensions ?? 'Asset dimensions'} production size</p>
+                    </div>
+                  </aside>
+                </div>
+              )}
+
+              {campaignStep === 3 && (
+                <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_330px]">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="md:col-span-2">
+                      <TeamSelectWithNew label="Installation owner" value={campaignForm.installOwner} options={installationTeamOptions} onChange={installOwner => setCampaignForm({ ...campaignForm, installOwner })} />
+                    </div>
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">
+                      Installation due date
+                      <input
+                        type="date"
+                        className="mt-1 h-11 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none"
+                        value={campaignForm.installationDueDate}
+                        onChange={event => setCampaignForm({ ...campaignForm, installationDueDate: event.target.value })}
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">
+                      Work order assignment
+                      <select
+                        className="mt-1 h-11 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none"
+                        value={campaignForm.workOrderAssignment}
+                        onChange={event => setCampaignForm({ ...campaignForm, workOrderAssignment: event.target.value as CampaignAssignmentMode })}
+                      >
+                        <option value="Create installation work order">Create installation work order</option>
+                        <option value="Create proof survey only">Create proof survey only</option>
+                        <option value="Campaign booking only">Campaign booking only</option>
+                      </select>
+                    </label>
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4] md:col-span-2">Install requirement<textarea className="mt-1 min-h-[86px] w-full rounded-lg border border-white/10 bg-[#07111F] px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" value={campaignForm.installSla} onChange={event => setCampaignForm({ ...campaignForm, installSla: event.target.value })} /></label>
+                    <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4] md:col-span-2">Proof requirement<textarea className="mt-1 min-h-[86px] w-full rounded-lg border border-white/10 bg-[#07111F] px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" value={campaignForm.proofSla} onChange={event => setCampaignForm({ ...campaignForm, proofSla: event.target.value })} /></label>
+                  </div>
+                  <aside className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#7A94B4]">Work order preview</p>
+                    <h3 className="mt-2 text-xl font-black text-white">{campaignForm.campaign}</h3>
+                    <p className="mt-1 text-sm text-[#9DB4D0]">{campaignForm.client} - {campaignForm.buyerContact}</p>
+                    <div className="mt-4 space-y-2">
+                      {[
+                        ['Asset', campaignAsset?.name ?? 'No asset selected'],
+                        ['Artwork', campaignForm.artworkFile],
+                        ['Flight', `${campaignForm.bookedFrom} to ${campaignForm.bookedTo}`],
+                        ['Install due', campaignForm.installationDueDate],
+                        ['Assignment', campaignForm.workOrderAssignment],
+                        ['Owner', campaignForm.installOwner],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-lg border border-white/10 bg-[#0B172A] p-3">
+                          <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
+                          <p className="mt-1 text-sm font-black text-white">{value}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </aside>
+                </div>
+              )}
+
+              <div className="mt-5 flex flex-col gap-3 border-t border-white/10 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-xs leading-5 text-[#9DB4D0]">Starting the campaign updates the asset work order, artwork record, booked dates and proof requirements.</p>
+                <div className="flex flex-wrap gap-2">
+                  {campaignStep > 1 && (
+                    <button type="button" className="min-h-12 rounded-lg border border-white/10 bg-white/5 px-7 py-3 text-base font-bold text-white hover:bg-white/10" onClick={() => setCampaignStep((campaignStep - 1) as CampaignWizardStep)}>
+                      Back
+                    </button>
+                  )}
+                  {campaignStep < 3 ? (
+                    <button type="button" className="min-h-12 rounded-lg bg-[#2E7FFF] px-8 py-3 text-base font-bold text-white hover:bg-[#4C91FF]" onClick={() => setCampaignStep((campaignStep + 1) as CampaignWizardStep)}>
+                      Next
+                    </button>
+                  ) : (
+                    <button type="button" className="inline-flex min-h-12 items-center gap-2 rounded-lg bg-[#E11D2E] px-7 py-3 text-base font-bold text-white hover:bg-[#ff3445] disabled:opacity-50" onClick={handleStartCampaign} disabled={busy || !campaignForm.assetId}>
+                      <CalendarClock size={16} /> Start Campaign
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <MetricInsightModal
         metric={modalMetric}
         onRunAction={runMetricAction}

@@ -16,6 +16,13 @@ function markerColor(asset: OOHAsset): string {
   return '#fbbf24';
 }
 
+const modernMapTiles = {
+  attribution: '&copy; OpenStreetMap &copy; CARTO',
+  url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+  subdomains: 'abcd',
+  maxZoom: 20,
+};
+
 function pillClass(value: string): string {
   if (['Ready', 'Approved', 'Live', 'complete'].includes(value)) return 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200';
   if (['Rejected', 'Expired', 'attention'].includes(value)) return 'border-red-400/25 bg-red-400/10 text-red-200';
@@ -30,8 +37,8 @@ function ClientMap({ assets }: { assets: OOHAsset[] }) {
 
   return (
     <div className="h-[340px] overflow-hidden rounded-lg border border-white/10 bg-[#07111F]">
-      <MapContainer center={center} zoom={9} scrollWheelZoom={false} className="h-full w-full">
-        <TileLayer attribution='&copy; OpenStreetMap contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+      <MapContainer center={center} zoom={9} scrollWheelZoom={true} className="h-full w-full ooh-modern-map">
+        <TileLayer {...modernMapTiles} />
         {assets.map(asset => (
           <CircleMarker key={asset.id} center={[asset.lat, asset.lng]} radius={9} pathOptions={{ color: markerColor(asset), fillColor: markerColor(asset), fillOpacity: 0.78, weight: 2 }}>
             <Popup>
