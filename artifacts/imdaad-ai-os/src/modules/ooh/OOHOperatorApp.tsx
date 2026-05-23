@@ -4036,9 +4036,6 @@ function OOHObligations({
             <h2 className="mt-1 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Obligations Register</h2>
             <p className="mt-2 max-w-4xl text-sm leading-6 text-[#B8C7DB]">Track permits, site access authorisations, traffic approvals, safety packs, installation, proof, inspections, client reporting and DOOH playback duties against every OOH asset.</p>
           </div>
-          <button type="button" className="inline-flex items-center gap-2 rounded-lg bg-[#2E7FFF] px-4 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={() => openPrimaryAction(selected)}>
-            Open Required Action <ExternalLink size={15} />
-          </button>
         </div>
 
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
