@@ -3836,6 +3836,7 @@ function OOHObligations({
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All Status' | OOHObligationStatus>('All Status');
   const [categoryFilter, setCategoryFilter] = useState<'All Categories' | OOHObligationCategory>('All Categories');
+  const [summaryFilter, setSummaryFilter] = useState<'None' | 'Open Proof'>('None');
   const [marketFilter, setMarketFilter] = useState('All markets');
   const [selectedId, setSelectedId] = useState('');
   const markets = useMemo(() => ['All markets', ...Array.from(new Set(data.assets.map(asset => asset.market))).filter(Boolean)], [data.assets]);
@@ -3844,7 +3845,8 @@ function OOHObligations({
     return haystack.includes(query.toLowerCase())
       && (statusFilter === 'All Status' || item.status === statusFilter)
       && (categoryFilter === 'All Categories' || item.category === categoryFilter)
-      && (marketFilter === 'All markets' || item.market === marketFilter);
+      && (marketFilter === 'All markets' || item.market === marketFilter)
+      && (summaryFilter !== 'Open Proof' || (item.category === 'Proof' && item.status !== 'Met'));
   });
   const selected = obligations.find(item => item.id === selectedId)
     ?? obligations.find(item => item.asset.id === selectedAssetId)
@@ -3887,22 +3889,24 @@ function OOHObligations({
 
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           {[
-            ['Overdue', String(counts.overdue), 'Missed obligations requiring immediate owner action', 'Overdue'],
-            ['Due Soon', String(counts.dueSoon), 'Items inside the operating action window', 'Due Soon'],
-            ['Proof Obligations', String(counts.proof), 'Proof duties that are not yet closed', 'Proof'],
-            ['Met', String(counts.met), 'Closed obligations with supporting state', 'Met'],
+            ['Overdue Actions', String(counts.overdue), 'Due date has passed and the owner must act now.', 'Overdue'],
+            ['Due Soon', String(counts.dueSoon), 'Items inside the operating action window.', 'Due Soon'],
+            ['Evidence Still Needed', String(counts.proof), 'Proof, photo, GPS or client evidence tasks not closed.', 'Open Proof'],
+            ['Completed', String(counts.met), 'Obligations closed with required evidence or system state.', 'Met'],
           ].map(([label, value, helper, target]) => (
             <button
               key={label}
               type="button"
               className="rounded-lg border border-white/10 bg-[#07111F] p-4 text-left transition hover:border-[#7EB8F7]/45 hover:bg-white/[0.035]"
               onClick={() => {
-                if (target === 'Proof') {
+                if (target === 'Open Proof') {
                   setCategoryFilter('Proof');
                   setStatusFilter('All Status');
+                  setSummaryFilter('Open Proof');
                 } else {
                   setStatusFilter(target as OOHObligationStatus);
                   setCategoryFilter('All Categories');
+                  setSummaryFilter('None');
                 }
               }}
             >
@@ -3926,10 +3930,16 @@ function OOHObligations({
                 <Search size={15} />
                 <input className="w-52 bg-transparent text-white outline-none placeholder:text-[#58708E]" placeholder="Search obligations" value={query} onChange={event => setQuery(event.target.value)} />
               </label>
-              <select className="h-10 rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm font-bold text-white outline-none" value={statusFilter} onChange={event => setStatusFilter(event.target.value as 'All Status' | OOHObligationStatus)}>
+              <select className="h-10 rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm font-bold text-white outline-none" value={statusFilter} onChange={event => {
+                setStatusFilter(event.target.value as 'All Status' | OOHObligationStatus);
+                setSummaryFilter('None');
+              }}>
                 {obligationStatuses.map(item => <option key={item} value={item}>{item}</option>)}
               </select>
-              <select className="h-10 rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm font-bold text-white outline-none" value={categoryFilter} onChange={event => setCategoryFilter(event.target.value as 'All Categories' | OOHObligationCategory)}>
+              <select className="h-10 rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm font-bold text-white outline-none" value={categoryFilter} onChange={event => {
+                setCategoryFilter(event.target.value as 'All Categories' | OOHObligationCategory);
+                setSummaryFilter('None');
+              }}>
                 {obligationCategories.map(item => <option key={item} value={item}>{item}</option>)}
               </select>
               <select className="h-10 rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm font-bold text-white outline-none" value={marketFilter} onChange={event => setMarketFilter(event.target.value)}>
