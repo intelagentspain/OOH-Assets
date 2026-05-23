@@ -31,6 +31,17 @@ async function readJson<T>(response: Response): Promise<T> {
   return payload;
 }
 
+function readLocalClientPage(token: string): OOHClientPagePayload | null {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(`ooh-client-page:${token}`);
+    if (!raw) return null;
+    return JSON.parse(raw) as OOHClientPagePayload;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchOOHBootstrap(): Promise<OOHBootstrap> {
   try {
     const response = await fetch('/api/ooh/bootstrap');
@@ -99,6 +110,8 @@ export async function fetchOOHClientPage(token: string): Promise<OOHClientPagePa
     const response = await fetch(`/api/ooh/client-pages/${encodeURIComponent(token)}`);
     return await readJson<OOHClientPagePayload>(response);
   } catch {
+    const localPage = readLocalClientPage(token);
+    if (localPage) return localPage;
     const page = fallbackOOHBootstrap.clientPages.find(item => item.token === token) ?? fallbackOOHBootstrap.clientPages[0];
     return {
       page,
