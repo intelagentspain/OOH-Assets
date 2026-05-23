@@ -3970,20 +3970,10 @@ function OOHObligations({
   data,
   selectedAssetId,
   onSelectAsset,
-  onOpenAssets,
-  onOpenSurveys,
-  onOpenEvidence,
-  onOpenClientPages,
-  onOpenWorkOrders,
 }: {
   data: OOHBootstrap;
   selectedAssetId: string;
   onSelectAsset: (assetId: string) => void;
-  onOpenAssets: () => void;
-  onOpenSurveys: () => void;
-  onOpenEvidence: () => void;
-  onOpenClientPages: () => void;
-  onOpenWorkOrders: () => void;
 }) {
   const obligations = useMemo(() => buildOOHObligations(data), [data]);
   const metricsUpdatedAt = useMemo(() => new Date().toISOString(), [obligations]);
@@ -4015,14 +4005,6 @@ function OOHObligations({
   const selectObligation = (item: OOHObligation) => {
     setSelectedId(item.id);
     onSelectAsset(item.asset.id);
-  };
-  const openPrimaryAction = (item: OOHObligation) => {
-    onSelectAsset(item.asset.id);
-    if (item.category === 'Proof') onOpenEvidence();
-    else if (item.category === 'Inspection') onOpenSurveys();
-    else if (item.category === 'Client Reporting') onOpenClientPages();
-    else if (item.category === 'Installation') onOpenWorkOrders();
-    else onOpenAssets();
   };
 
   if (!selected) return null;
@@ -4070,12 +4052,11 @@ function OOHObligations({
         </div>
       </div>
 
-      <div className="grid min-w-0 items-start gap-5 2xl:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="min-w-0 rounded-lg border border-white/10 bg-[#0B172A] p-4">
+      <div className="min-w-0 rounded-lg border border-white/10 bg-[#0B172A] p-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <h3 className="text-xl font-black text-white">Operating obligation queue</h3>
-              <p className="mt-1 text-sm text-[#9DB4D0]">Click an obligation to see required evidence, linked controls and the action owner.</p>
+              <p className="mt-1 text-sm text-[#9DB4D0]">Click an obligation to select it, then use the filters to focus by status, category or market.</p>
             </div>
             <div className="flex flex-wrap gap-2">
               <label className="flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm text-[#9DB4D0]">
@@ -4162,65 +4143,6 @@ function OOHObligations({
               <div className="p-8 text-center text-sm text-[#9DB4D0]">No obligations match the current filters.</div>
             )}
           </div>
-        </div>
-
-        <aside className="space-y-4 2xl:sticky 2xl:top-5">
-          <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
-            <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Evidence required</p>
-            <div className="mt-3 space-y-2">
-              {selected.evidenceRequired.map(item => (
-                <div key={item} className="flex items-start gap-2 rounded-lg border border-white/10 bg-[#07111F] p-3 text-sm text-white">
-                  <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-emerald-200" />
-                  <span>{item}</span>
-                </div>
-              ))}
-            </div>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <button type="button" className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={() => openPrimaryAction(selected)}>
-                Open Action <ExternalLink size={14} />
-              </button>
-              <button type="button" className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-black text-white hover:bg-white/10" onClick={() => {
-                onSelectAsset(selected.asset.id);
-                onOpenAssets();
-              }}>
-                Open Asset <Building2 size={14} />
-              </button>
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
-            <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Linked controls</p>
-            <div className="mt-3 space-y-2">
-              {selected.linkedControls.map(control => (
-                <div key={control.code} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <p className="font-mono text-[11px] font-black text-[#7EB8F7]">{control.code}</p>
-                    <span className="text-xs font-black text-[#B8C7DB]">{control.status}</span>
-                  </div>
-                  <p className="mt-2 text-sm font-black text-white">{control.title}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
-            <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Obligation timeline</p>
-            <div className="mt-3 space-y-0">
-              {selected.timeline.map((entry, index) => (
-                <div key={`${entry.date}-${entry.note}`} className="grid grid-cols-[16px_1fr] gap-3">
-                  <div className="flex flex-col items-center">
-                    <span className={`mt-1 h-2 w-2 rounded-full ${index === 0 ? 'bg-[#7EB8F7]' : 'bg-[#526A87]'}`} />
-                    {index < selected.timeline.length - 1 && <span className="h-full min-h-[34px] w-px bg-white/10" />}
-                  </div>
-                  <div className="pb-4">
-                    <p className="text-[11px] text-[#7A94B4]">{entry.date}</p>
-                    <p className="mt-1 text-sm leading-5 text-white">{entry.note}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </aside>
       </div>
     </section>
   );
@@ -6374,11 +6296,6 @@ export function OOHOperatorApp() {
             data={data}
             selectedAssetId={selectedAssetId}
             onSelectAsset={setSelectedAssetId}
-            onOpenAssets={() => navigateToTab('Assets')}
-            onOpenSurveys={() => navigateToTab('Surveys')}
-            onOpenEvidence={() => navigateToTab('Evidence')}
-            onOpenClientPages={() => navigateToTab('Clients')}
-            onOpenWorkOrders={() => navigateToTab('Work Orders')}
           />
         )}
 
