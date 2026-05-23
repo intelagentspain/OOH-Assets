@@ -47,7 +47,7 @@ import { fallbackOOHBootstrap, oohSurveyQuestions } from './seedData';
 import { assetPreviewPhotoAlt, assetPreviewPhotoSrc, evidencePhotoAlt, evidencePhotoObjectPosition, evidencePhotoSrc } from './evidenceVisual';
 import type { OOHEvidenceItem, OOHAsset, OOHBootstrap, OOHReviewStatus, OOHSubmission } from './types';
 
-type OOHTab = 'Command' | 'Assets' | 'GIS' | 'Surveys' | 'Evidence' | 'Client Pages' | 'Work Orders' | 'Obligations' | 'Vendors' | 'Settings' | 'Reports';
+type OOHTab = 'Command' | 'Assets' | 'GIS' | 'Surveys' | 'Evidence' | 'Clients' | 'Work Orders' | 'Obligations' | 'Vendors' | 'Settings' | 'Reports';
 
 interface AssetForm {
   name: string;
@@ -105,13 +105,48 @@ interface AssignmentForm {
   reviewer: string;
 }
 
+type OOHReportId = 'campaign-evidence-pack' | 'permit-watchlist' | 'survey-scorecard' | 'network-inventory' | 'installation-sla' | 'client-access-log';
+
+interface OOHReportCard {
+  id: OOHReportId;
+  title: string;
+  text: string;
+  icon: LucideIcon;
+}
+
+interface OOHGeneratedReport {
+  id: OOHReportId;
+  title: string;
+  subtitle: string;
+  generatedAt: string;
+  summary: Array<{ label: string; value: string; helper: string }>;
+  columns: string[];
+  rows: string[][];
+  narrative: string[];
+  nextActions: string[];
+}
+
+interface OOHClientBookingRow {
+  key: string;
+  client: string;
+  campaign: string;
+  assets: OOHAsset[];
+  primaryAsset: OOHAsset;
+  bookedFrom: string;
+  bookedTo: string;
+  installState: string;
+  proofState: string;
+  openItems: number;
+  page?: OOHBootstrap['clientPages'][number];
+}
+
 const tabs: Array<{ id: OOHTab; label: string; icon: typeof BarChart3 }> = [
   { id: 'Command', label: 'Command', icon: BarChart3 },
   { id: 'Assets', label: 'Assets', icon: Building2 },
   { id: 'GIS', label: 'GIS', icon: MapPin },
   { id: 'Surveys', label: 'Surveys', icon: ClipboardCheck },
   { id: 'Evidence', label: 'Evidence', icon: Camera },
-  { id: 'Client Pages', label: 'Client Pages', icon: Globe2 },
+  { id: 'Clients', label: 'Clients', icon: Globe2 },
   { id: 'Work Orders', label: 'Work Orders', icon: FileSearch },
   { id: 'Obligations', label: 'Obligations', icon: FileText },
   { id: 'Vendors', label: 'Vendor IQ', icon: ShieldCheck },
@@ -125,7 +160,7 @@ const oohTabPaths: Record<OOHTab, string> = {
   GIS: '/ooh/gis',
   Surveys: '/ooh/surveys',
   Evidence: '/ooh/evidence',
-  'Client Pages': '/ooh/client-pages',
+  Clients: '/ooh/clients',
   'Work Orders': '/ooh/workorders',
   Obligations: '/ooh/obligations',
   Vendors: '/ooh/vendorintelligence',
@@ -139,13 +174,13 @@ const assetNetworkOptions = ['Dubai', 'Sharjah', 'Abu Dhabi', 'Ajman', 'Ras Al K
 const marketOptions = ['All markets', 'Dubai', 'Abu Dhabi', 'Sharjah'];
 const recurrenceOptions: AssignmentForm['recurrence'][] = ['One-time', 'Weekly', 'Monthly', 'Quarterly'];
 const defaultInstallationTeams = ['Falcon Field Team', 'Capital Survey Crew', 'Coastal QA Team', 'In-house Install Team', 'Certified Print Vendor'];
-const reportCards: Array<{ title: string; text: string; icon: LucideIcon }> = [
-  { title: 'Campaign Evidence Pack', text: 'Client-ready proof, maps, survey scores and exception notes.', icon: FileCheck2 },
-  { title: 'Permit Watchlist', text: 'Expiry windows, municipal owner, route and access requirements.', icon: ShieldCheck },
-  { title: 'Survey Scorecard', text: 'Recurring field survey trend, findings and reviewer status.', icon: BarChart3 },
-  { title: 'Network Inventory Export', text: 'OOH asset register with GIS coordinates and attributes.', icon: Layers3 },
-  { title: 'Installation SLA Report', text: 'Booked, installed, pending proof and rejected evidence.', icon: CalendarClock },
-  { title: 'Client Access Log', text: 'Secure page state, expiry controls and shared campaigns.', icon: Users },
+const reportCards: OOHReportCard[] = [
+  { id: 'campaign-evidence-pack', title: 'Campaign Evidence Pack', text: 'Client-ready proof, maps, survey scores and exception notes.', icon: FileCheck2 },
+  { id: 'permit-watchlist', title: 'Permit Watchlist', text: 'Expiry windows, municipal owner, route and access requirements.', icon: ShieldCheck },
+  { id: 'survey-scorecard', title: 'Survey Scorecard', text: 'Recurring field survey trend, findings and reviewer status.', icon: BarChart3 },
+  { id: 'network-inventory', title: 'Network Inventory Export', text: 'OOH asset register with GIS coordinates and attributes.', icon: Layers3 },
+  { id: 'installation-sla', title: 'Installation SLA Report', text: 'Booked, installed, pending proof and rejected evidence.', icon: CalendarClock },
+  { id: 'client-access-log', title: 'Client Access Log', text: 'Secure page state, expiry controls and shared campaigns.', icon: Users },
 ];
 
 const integrationFeeds = [
@@ -192,6 +227,99 @@ function actionState(asset: OOHAsset): string {
 function assetFlight(asset: OOHAsset): string {
   if (!asset.bookedFrom || !asset.bookedTo) return 'Flight pending';
   return `${formatDate(asset.bookedFrom)} to ${formatDate(asset.bookedTo)}`;
+}
+
+function activeClientBookingAssets(assets: OOHAsset[]): OOHAsset[] {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  return assets.filter(asset => {
+    const client = asset.client.trim();
+    const campaign = asset.campaign.trim();
+    const bookedFrom = Date.parse(asset.bookedFrom ?? '');
+    const bookedTo = Date.parse(asset.bookedTo ?? '');
+    return Boolean(client)
+      && !/unassigned/i.test(client)
+      && Boolean(campaign)
+      && !/network$/i.test(campaign)
+      && Number.isFinite(bookedFrom)
+      && Number.isFinite(bookedTo)
+      && bookedTo >= today.getTime()
+      && asset.status !== 'Inactive';
+  });
+}
+
+function assetSetKey(assetIds: string[]): string {
+  return [...assetIds].sort().join('|');
+}
+
+function clientPageMatchesBooking(page: OOHBootstrap['clientPages'][number], client: string, campaign: string, assetIds: string[]): boolean {
+  if (page.client !== client || page.campaign !== campaign) return false;
+  const pageAssetKey = assetSetKey(page.assetIds);
+  const bookingAssetKey = assetSetKey(assetIds);
+  if (pageAssetKey === bookingAssetKey) return true;
+  return page.assetIds.some(assetId => assetIds.includes(assetId));
+}
+
+function buildClientBookingRows(assets: OOHAsset[], clientPages: OOHBootstrap['clientPages']): OOHClientBookingRow[] {
+  const grouped = new Map<string, OOHAsset[]>();
+
+  for (const asset of activeClientBookingAssets(assets)) {
+    const key = `${asset.client.trim()}|||${asset.campaign.trim()}`;
+    grouped.set(key, [...(grouped.get(key) ?? []), asset]);
+  }
+
+  return Array.from(grouped.entries()).map(([key, bookingAssets]) => {
+    const [client, campaign] = key.split('|||');
+    const sortedAssets = [...bookingAssets].sort((a, b) => Date.parse(a.bookedFrom ?? '') - Date.parse(b.bookedFrom ?? ''));
+    const assetIds = sortedAssets.map(asset => asset.id);
+    const page = clientPages
+      .filter(candidate => clientPageMatchesBooking(candidate, client, campaign, assetIds))
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
+    const bookedFrom = sortedAssets.reduce((earliest, asset) => {
+      const current = Date.parse(asset.bookedFrom ?? '');
+      const best = Date.parse(earliest);
+      return Number.isFinite(current) && current < best ? asset.bookedFrom ?? earliest : earliest;
+    }, sortedAssets[0]?.bookedFrom ?? '');
+    const bookedTo = sortedAssets.reduce((latest, asset) => {
+      const current = Date.parse(asset.bookedTo ?? '');
+      const best = Date.parse(latest);
+      return Number.isFinite(current) && current > best ? asset.bookedTo ?? latest : latest;
+    }, sortedAssets[0]?.bookedTo ?? '');
+    const installed = sortedAssets.filter(asset => asset.installStatus === 'Installed').length;
+    const proofReady = sortedAssets.filter(asset => asset.evidenceStatus === 'Ready').length;
+    const openItems = sortedAssets.filter(asset => asset.installStatus !== 'Installed' || asset.evidenceStatus !== 'Ready').length;
+
+    return {
+      key,
+      client,
+      campaign,
+      assets: sortedAssets,
+      primaryAsset: sortedAssets[0],
+      bookedFrom,
+      bookedTo,
+      installState: installed === sortedAssets.length ? 'Installed' : `${installed}/${sortedAssets.length} installed`,
+      proofState: proofReady === sortedAssets.length ? 'Ready' : `${proofReady}/${sortedAssets.length} ready`,
+      openItems,
+      page,
+    };
+  }).sort((a, b) => Date.parse(a.bookedFrom) - Date.parse(b.bookedFrom));
+}
+
+function clientBookingAssetLabel(row: OOHClientBookingRow): string {
+  if (row.assets.length <= 1) return row.primaryAsset.name;
+  return `${row.primaryAsset.name} + ${row.assets.length - 1} more`;
+}
+
+function clientBookingDuration(row: OOHClientBookingRow): string {
+  if (!row.bookedFrom || !row.bookedTo) return 'Dates pending';
+  return `${formatDate(row.bookedFrom)} to ${formatDate(row.bookedTo)}`;
+}
+
+function clientBookingMarketRoute(row: OOHClientBookingRow): string {
+  const markets = Array.from(new Set(row.assets.map(asset => asset.market).filter(Boolean)));
+  const marketLabel = markets.length ? markets.join(', ') : row.primaryAsset.market;
+  return `${marketLabel} / ${row.primaryAsset.route}`;
 }
 
 function getLastClientView(asset: OOHAsset): string {
@@ -753,6 +881,7 @@ function buildAssignmentForm(assetId: string): AssignmentForm {
 
 function getInitialOOHTab(): OOHTab {
   const path = window.location.pathname;
+  if (path === '/ooh/client-pages' || path.startsWith('/ooh/client-pages/')) return 'Clients';
   const match = Object.entries(oohTabPaths).find(([, tabPath]) => tabPath !== '/ooh' && (path === tabPath || path.startsWith(`${tabPath}/`)));
   if (match) return match[0] as OOHTab;
   return 'Command';
@@ -1053,6 +1182,114 @@ function Pill({ children, tone, className = '' }: { children: string; tone?: str
     <span className={`inline-flex min-h-7 items-center justify-center whitespace-nowrap rounded-full border px-3.5 py-1.5 text-[11px] font-bold leading-none ${tone ?? statusTone(children)} ${className}`}>
       {children}
     </span>
+  );
+}
+
+function OOHReportPreviewModal({ report, onClose }: { report: OOHGeneratedReport | null; onClose: () => void }) {
+  if (!report) return null;
+
+  return (
+    <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" role="presentation" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`ooh-report-${report.id}`}
+        className="max-h-[92vh] w-full max-w-7xl overflow-hidden rounded-lg border border-[#2E7FFF]/35 bg-[#081426] shadow-2xl shadow-black/50"
+        onClick={event => event.stopPropagation()}
+      >
+        <div className="flex flex-col gap-4 border-b border-white/10 bg-[#0B172A] p-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#7EB8F7]">Generated report preview</p>
+            <h2 id={`ooh-report-${report.id}`} className="mt-1 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{report.title}</h2>
+            <p className="mt-2 max-w-4xl text-sm leading-6 text-[#B8C7DB]">{report.subtitle}</p>
+            <p className="mt-2 text-xs font-bold text-[#7A94B4]">Generated {formatDateTime(report.generatedAt)}</p>
+          </div>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <button
+              type="button"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-4 py-2 text-sm font-black text-white hover:bg-[#4B91FF]"
+              onClick={() => exportReportCsv(report)}
+            >
+              <Download size={16} /> Export CSV
+            </button>
+            <button
+              type="button"
+              aria-label="Close report preview"
+              className="flex h-11 w-11 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-[#B8C7DB] hover:bg-white/10 hover:text-white"
+              onClick={onClose}
+            >
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        <div className="custom-scrollbar max-h-[calc(92vh-118px)] overflow-y-auto p-4">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {report.summary.map(item => (
+              <div key={item.label} className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+                <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{item.label}</p>
+                <p className="mt-2 text-3xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{item.value}</p>
+                <p className="mt-2 text-xs leading-5 text-[#9DB4D0]">{item.helper}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#7EB8F7]">Operator readout</p>
+              <div className="mt-3 space-y-3 text-sm leading-6 text-[#CFE3FA]">
+                {report.narrative.map(line => <p key={line}>{line}</p>)}
+              </div>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#7EB8F7]">Recommended actions</p>
+              <div className="mt-3 space-y-2">
+                {report.nextActions.map((action, index) => (
+                  <div key={action} className="flex gap-3 rounded-lg border border-blue-300/15 bg-blue-300/8 p-3">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#2E7FFF] text-xs font-black text-white">{index + 1}</span>
+                    <p className="text-sm leading-6 text-[#CFE3FA]">{action}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 overflow-hidden rounded-lg border border-white/10 bg-[#07111F]">
+            <div className="flex flex-col gap-2 border-b border-white/10 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#7EB8F7]">Report rows</p>
+                <h3 className="mt-1 text-lg font-black text-white">Preview data</h3>
+              </div>
+              <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">{`${report.rows.length} rows`}</Pill>
+            </div>
+            <div className="custom-scrollbar max-h-[360px] overflow-auto">
+              <table className="w-full min-w-[920px] border-collapse text-left text-sm">
+                <thead className="sticky top-0 z-10 bg-[#07111F] text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">
+                  <tr>
+                    {report.columns.map(column => <th key={column} className="border-b border-white/10 px-4 py-3">{column}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.rows.length ? report.rows.map((row, index) => (
+                    <tr key={`${report.id}-${index}`} className="border-t border-white/10 odd:bg-white/[0.02]">
+                      {row.map((cell, cellIndex) => (
+                        <td key={`${report.id}-${index}-${cellIndex}`} className="max-w-[280px] px-4 py-3 align-top text-[#CFE3FA]">
+                          <span className={cellIndex === 0 ? 'font-black text-white' : ''}>{cell}</span>
+                        </td>
+                      ))}
+                    </tr>
+                  )) : (
+                    <tr>
+                      <td className="px-4 py-8 text-center text-[#9DB4D0]" colSpan={report.columns.length}>No rows match this report.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1357,6 +1594,278 @@ function latestInspectionForAsset(assetId: string, submissions: OOHSubmission[])
   return submissions
     .filter(submission => submission.assetId === assetId)
     .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime())[0];
+}
+
+function formatReportDate(value?: string): string {
+  return value && Number.isFinite(Date.parse(value)) ? formatDate(value) : 'Not set';
+}
+
+function daysUntilDate(value?: string): number | null {
+  if (!value || !Number.isFinite(Date.parse(value))) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(value);
+  target.setHours(0, 0, 0, 0);
+  return Math.ceil((target.getTime() - today.getTime()) / 86400000);
+}
+
+function averageScore(values: number[]): number {
+  if (!values.length) return 0;
+  return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+}
+
+function reportDefinition(reportId: OOHReportId): OOHReportCard {
+  return reportCards.find(card => card.id === reportId) ?? reportCards[0];
+}
+
+function buildOOHReportPreview(data: OOHBootstrap, reportId: OOHReportId): OOHGeneratedReport {
+  const definition = reportDefinition(reportId);
+  const generatedAt = new Date().toISOString();
+
+  if (reportId === 'campaign-evidence-pack') {
+    const rows = data.clientPages.map(page => {
+      const pageAssets = data.assets.filter(asset => page.assetIds.includes(asset.id));
+      const approvedAssets = pageAssets.filter(asset => asset.evidenceStatus === 'Ready').length;
+      return [
+        page.client,
+        page.campaign,
+        pageAssets.length ? pageAssets.map(asset => asset.name).join('; ') : 'No assets linked',
+        `${approvedAssets}/${Math.max(1, pageAssets.length)} approved`,
+        `${page.surveyScore}%`,
+        String(page.openItems),
+        formatReportDate(page.expiresAt),
+      ];
+    });
+    const livePages = data.clientPages.filter(page => page.status === 'Live').length;
+    const approvedAssetCount = data.assets.filter(asset => asset.evidenceStatus === 'Ready').length;
+    const openItems = data.assets.filter(asset => asset.evidenceStatus !== 'Ready').length;
+    return {
+      id: reportId,
+      title: definition.title,
+      subtitle: 'Client-facing evidence coverage by campaign, asset and proof state.',
+      generatedAt,
+      summary: [
+        { label: 'Live evidence pages', value: String(livePages), helper: 'Client links currently available.' },
+        { label: 'Approved proof assets', value: `${approvedAssetCount}/${data.assets.length}`, helper: 'Assets with client-ready evidence.' },
+        { label: 'Average inspection score', value: `${averageScore(data.clientPages.map(page => page.surveyScore))}%`, helper: 'Mean score across evidence pages.' },
+        { label: 'Open proof items', value: String(openItems), helper: 'Assets still missing approved proof.' },
+      ],
+      columns: ['Client', 'Campaign', 'Assets', 'Approved proof', 'Inspection score', 'Open items', 'Page expiry'],
+      rows,
+      narrative: [
+        'This report is used before sharing or renewing a client evidence page.',
+        'It shows which campaigns have a secure proof pack and which assets still need reviewer-approved field evidence.',
+      ],
+      nextActions: [
+        'Approve pending submissions before publishing the client link.',
+        'Regenerate or resend the page for campaigns with current proof and expiry still active.',
+      ],
+    };
+  }
+
+  if (reportId === 'permit-watchlist') {
+    const watchlist = data.assets
+      .filter(asset => asset.permitStatus !== 'Valid' || (daysUntilDate(asset.permitExpiry) ?? 999) <= 45)
+      .sort((a, b) => Date.parse(a.permitExpiry) - Date.parse(b.permitExpiry));
+    return {
+      id: reportId,
+      title: definition.title,
+      subtitle: 'Permit expiry, route, owner and action status for asset compliance control.',
+      generatedAt,
+      summary: [
+        { label: 'Watchlist assets', value: String(watchlist.length), helper: 'Assets needing permit attention.' },
+        { label: 'Expired', value: String(data.assets.filter(asset => asset.permitStatus === 'Expired').length), helper: 'Permit already outside valid window.' },
+        { label: 'Pending', value: String(data.assets.filter(asset => asset.permitStatus === 'Pending').length), helper: 'Permit status still awaiting confirmation.' },
+        { label: 'Next expiry', value: formatReportDate(watchlist[0]?.permitExpiry), helper: 'Earliest permit date in the watchlist.' },
+      ],
+      columns: ['Asset', 'Market / route', 'Permit', 'Expiry', 'Owner / site', 'Action'],
+      rows: watchlist.map(asset => [
+        asset.name,
+        `${asset.market} / ${asset.route}`,
+        asset.permitStatus,
+        formatReportDate(asset.permitExpiry),
+        asset.owner,
+        asset.permitStatus === 'Valid' ? 'Monitor expiry window' : 'Resolve permit before client proof pack',
+      ]),
+      narrative: [
+        'This report gives compliance and operations a shared permit queue.',
+        'It prevents booked or visible assets from being treated as ready when permit status still needs attention.',
+      ],
+      nextActions: [
+        'Prioritize expired and pending permits before installation or client publication.',
+        'Attach permit renewal evidence to the asset record after resolution.',
+      ],
+    };
+  }
+
+  if (reportId === 'survey-scorecard') {
+    const submissions = [...data.submissions].sort((a, b) => Date.parse(b.submittedAt) - Date.parse(a.submittedAt));
+    const overdueAssignments = data.assignments.filter(assignment => assignment.status === 'Overdue').length;
+    const pendingReview = data.submissions.filter(submission => submission.status === 'Pending Review').length;
+    return {
+      id: reportId,
+      title: definition.title,
+      subtitle: 'Latest field inspection quality, reviewer state, issues and recurrence health.',
+      generatedAt,
+      summary: [
+        { label: 'Submitted inspections', value: String(submissions.length), helper: 'Captured survey submissions.' },
+        { label: 'Average score', value: `${averageScore(submissions.map(submission => submission.score))}%`, helper: 'Mean score across submitted inspections.' },
+        { label: 'Pending review', value: String(pendingReview), helper: 'Submissions waiting for reviewer decision.' },
+        { label: 'Overdue assignments', value: String(overdueAssignments), helper: 'Field assignments past due date.' },
+      ],
+      columns: ['Asset', 'Inspection date', 'Score', 'Reviewer', 'Status', 'Issues'],
+      rows: submissions.map(submission => {
+        const asset = data.assets.find(item => item.id === submission.assetId);
+        return [
+          asset?.name ?? submission.assetId,
+          formatDateTime(submission.submittedAt),
+          `${submission.score}%`,
+          submission.reviewer,
+          submission.status,
+          submission.issues.length ? submission.issues.join('; ') : 'No issues recorded',
+        ];
+      }),
+      narrative: [
+        'This report is for field supervisors and reviewers to understand recurring survey quality over time.',
+        'It separates clean inspections from submissions that need rework or reviewer approval.',
+      ],
+      nextActions: [
+        'Review pending submissions with photo, GPS and QR evidence before client publishing.',
+        'Create recurring inspections for assets with stale or missing survey history.',
+      ],
+    };
+  }
+
+  if (reportId === 'network-inventory') {
+    const markets = new Set(data.assets.map(asset => asset.market));
+    const formats = new Set(data.assets.map(asset => asset.format));
+    const gisReady = data.assets.filter(asset => Number.isFinite(asset.lat) && Number.isFinite(asset.lng) && asset.address && asset.route).length;
+    return {
+      id: reportId,
+      title: definition.title,
+      subtitle: 'GIS-ready OOH register with asset attributes, market coverage and current operating state.',
+      generatedAt,
+      summary: [
+        { label: 'Registered assets', value: String(data.assets.length), helper: 'Total OOH units in the register.' },
+        { label: 'Markets', value: String(markets.size), helper: 'Operating market coverage.' },
+        { label: 'Formats', value: String(formats.size), helper: 'Unique media formats.' },
+        { label: 'GIS complete', value: `${percent(gisReady, data.assets.length)}%`, helper: 'Assets with GPS, address and route.' },
+      ],
+      columns: ['Asset ID', 'Asset', 'Format', 'Market', 'Route', 'GPS', 'Status', 'Evidence'],
+      rows: data.assets.map(asset => [
+        asset.id,
+        asset.name,
+        `${asset.format} - ${asset.dimensions}`,
+        asset.market,
+        asset.route,
+        `${asset.lat.toFixed(5)}, ${asset.lng.toFixed(5)}`,
+        asset.status,
+        asset.evidenceStatus,
+      ]),
+      narrative: [
+        'This export is the operating source of truth for OOH inventory and GIS placement.',
+        'It is useful for audits, route planning, market filtering and integrating asset master data.',
+      ],
+      nextActions: [
+        'Fill missing GPS, route or market data before assigning field surveys.',
+        'Use this report as the baseline for import/export reconciliation with ERP or media booking feeds.',
+      ],
+    };
+  }
+
+  if (reportId === 'installation-sla') {
+    const bookedAssets = data.assets.filter(asset => asset.bookedFrom && asset.bookedTo && asset.status !== 'Inactive');
+    const installed = bookedAssets.filter(asset => asset.installStatus === 'Installed').length;
+    const pendingProof = bookedAssets.filter(asset => asset.evidenceStatus !== 'Ready').length;
+    return {
+      id: reportId,
+      title: definition.title,
+      subtitle: 'Booked campaign assets by installation status, proof requirement and next operator action.',
+      generatedAt,
+      summary: [
+        { label: 'Booked assets', value: String(bookedAssets.length), helper: 'Assets currently tied to campaign dates.' },
+        { label: 'Installed', value: `${installed}/${Math.max(1, bookedAssets.length)}`, helper: 'Assets marked installed.' },
+        { label: 'Pending proof', value: String(pendingProof), helper: 'Booked assets without approved evidence.' },
+        { label: 'Rejected proof', value: String(bookedAssets.filter(asset => asset.evidenceStatus === 'Rejected').length), helper: 'Assets needing evidence rework.' },
+      ],
+      columns: ['Campaign', 'Asset', 'Flight', 'Install', 'Proof SLA', 'Evidence', 'Next action'],
+      rows: bookedAssets.map(asset => [
+        asset.campaign,
+        asset.name,
+        assetFlight(asset),
+        asset.installStatus,
+        asset.proofSla ?? 'Evidence SLA not set',
+        asset.evidenceStatus,
+        actionState(asset),
+      ]),
+      narrative: [
+        'This report gives campaign operations a single view of booked assets that still need installation or proof closure.',
+        'It is designed to reduce missed installation evidence and late proof publishing.',
+      ],
+      nextActions: [
+        'Assign field proof surveys for assets marked missing, pending or rejected.',
+        'Resolve install status before the campaign flight starts or client evidence is shared.',
+      ],
+    };
+  }
+
+  const livePages = data.clientPages.filter(page => page.status === 'Live');
+  const totalViews = data.clientPages.reduce((sum, page) => sum + (page.viewerCount ?? 0), 0);
+  const recentlyViewed = data.clientPages.filter(page => page.lastViewedAt && (Date.now() - Date.parse(page.lastViewedAt)) <= 7 * 86400000).length;
+  return {
+    id: reportId,
+    title: definition.title,
+    subtitle: 'Evidence page status, access expiry, client viewing history and export activity.',
+    generatedAt,
+    summary: [
+      { label: 'Live pages', value: String(livePages.length), helper: 'Secure evidence links available.' },
+      { label: 'Total views', value: String(totalViews), helper: 'Client page view count across campaigns.' },
+      { label: 'Viewed this week', value: String(recentlyViewed), helper: 'Pages opened in the last seven days.' },
+      { label: 'Expiring soon', value: String(data.clientPages.filter(page => (daysUntilDate(page.expiresAt) ?? 999) <= 14).length), helper: 'Links expiring in the next 14 days.' },
+    ],
+    columns: ['Client', 'Campaign', 'Status', 'Last viewed', 'Views', 'Expires', 'Access'],
+    rows: data.clientPages.map(page => [
+      page.client,
+      page.campaign,
+      page.status,
+      page.lastViewedAt ? formatDateTime(page.lastViewedAt) : 'Not viewed',
+      String(page.viewerCount ?? 0),
+      formatReportDate(page.expiresAt),
+      page.accessState ?? 'Active',
+    ]),
+    narrative: [
+      'This report helps account teams see which clients have evidence access and whether links are being used.',
+      'It supports follow-up when pages have not been viewed or are close to expiry.',
+    ],
+    nextActions: [
+      'Resend links for live pages that have not been viewed.',
+      'Renew or lock access when page expiry or campaign scope changes.',
+    ],
+  };
+}
+
+function reportCsvCell(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+function exportReportCsv(report: OOHGeneratedReport) {
+  const lines = [
+    ['Report', report.title],
+    ['Generated', formatDateTime(report.generatedAt)],
+    ['Scope', report.subtitle],
+    [],
+    report.columns,
+    ...report.rows,
+  ].map(row => row.map(reportCsvCell).join(',')).join('\n');
+  const blob = new Blob([lines], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `${report.id}-${new Date(report.generatedAt).toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
 }
 
 function OOHMap({ assets, submissions, selectedAssetId, onSelect }: { assets: OOHAsset[]; submissions: OOHSubmission[]; selectedAssetId: string; onSelect: (assetId: string) => void }) {
@@ -3644,7 +4153,7 @@ const oohSettingsSections: Array<{ id: OOHSettingsSection; label: string; icon: 
   { id: 'network', label: 'Network', icon: MapPin, helper: 'GIS, naming and asset controls' },
   { id: 'evidence', label: 'Evidence', icon: Camera, helper: 'QR, GPS, photos and proof gates' },
   { id: 'surveys', label: 'Surveys', icon: ClipboardCheck, helper: 'Recurring inspection templates' },
-  { id: 'client', label: 'Client Pages', icon: Globe2, helper: 'Secure sharing and exports' },
+  { id: 'client', label: 'Clients', icon: Globe2, helper: 'Secure sharing and exports' },
   { id: 'permits', label: 'Permits', icon: ShieldCheck, helper: 'Compliance windows and blocks' },
   { id: 'integrations', label: 'Integrations', icon: Link2, helper: 'System feeds and sync health' },
   { id: 'access', label: 'Access', icon: Users, helper: 'Roles, vendors and controls' },
@@ -3775,7 +4284,7 @@ function OOHSettings({
             ['Assets Governed', String(data.assets.length), `${markets.length || 1} markets and ${formats.length || 1} formats`],
             ['Proof Ready', `${readyAssets}/${data.assets.length}`, `${proofBlockedAssets.length} assets need evidence action`],
             ['Field Assignments', String(activeAssignments.length), `${pendingSubmissions.length} submissions waiting for review`],
-            ['Client Pages', String(liveClientPages.length), `${settings.clientPageExpiryDays} day default expiry`],
+            ['Clients', String(liveClientPages.length), `${settings.clientPageExpiryDays} day default expiry`],
             ['DOOH Readiness', digitalAssets.length ? `${digitalReady}/${digitalAssets.length}` : 'N/A', settings.playerHealthChecks ? 'Player checks enabled' : 'Manual player checks'],
           ].map(([label, value, helper]) => (
             <div key={label} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
@@ -3945,7 +4454,7 @@ function OOHSettings({
                   ))}
                 </div>
                 <button type="button" className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={onOpenClientPages}>
-                  Open Client Pages <ExternalLink size={14} />
+                  Open Clients <ExternalLink size={14} />
                 </button>
               </div>
             </div>
@@ -4394,6 +4903,8 @@ export function OOHOperatorApp() {
   const [campaignStep, setCampaignStep] = useState<CampaignWizardStep>(1);
   const [campaignForm, setCampaignForm] = useState<CampaignForm>(() => buildCampaignForm(fallbackOOHBootstrap.assets[0]));
   const [campaignArtworkUpload, setCampaignArtworkUpload] = useState<CampaignArtworkUpload | null>(null);
+  const [copyNotice, setCopyNotice] = useState<{ path: string; copied: boolean } | null>(null);
+  const [activeReportId, setActiveReportId] = useState<OOHReportId | null>(null);
   const navigateToTab = (tab: OOHTab) => {
     setActiveTab(tab);
     const nextPath = oohTabPaths[tab];
@@ -4416,18 +4927,19 @@ export function OOHOperatorApp() {
   }, []);
 
   useEffect(() => {
-    if (!metricModalId && !locationAssetId && !assetModalOpen && !campaignModalOpen) return undefined;
+    if (!metricModalId && !locationAssetId && !assetModalOpen && !campaignModalOpen && !activeReportId) return undefined;
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setMetricModalId(null);
         setLocationAssetId(null);
         setAssetModalOpen(false);
         setCampaignModalOpen(false);
+        setActiveReportId(null);
       }
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [metricModalId, locationAssetId, assetModalOpen, campaignModalOpen]);
+  }, [metricModalId, locationAssetId, assetModalOpen, campaignModalOpen, activeReportId]);
 
   const selectedAsset = data.assets.find(asset => asset.id === selectedAssetId) ?? data.assets[0];
   const locationAsset = locationAssetId ? data.assets.find(asset => asset.id === locationAssetId) ?? null : null;
@@ -4449,6 +4961,8 @@ export function OOHOperatorApp() {
     const haystack = `${asset.id} ${asset.name} ${asset.format} ${asset.route} ${asset.client} ${asset.campaign}`.toLowerCase();
     return matchesMarket && haystack.includes(searchTerm.toLowerCase());
   }), [data.assets, marketFilter, searchTerm]);
+  const clientBookingRows = useMemo(() => buildClientBookingRows(data.assets, data.clientPages), [data.assets, data.clientPages]);
+  const activeReportPreview = useMemo(() => activeReportId ? buildOOHReportPreview(data, activeReportId) : null, [activeReportId, data]);
 
   const pendingSubmissions = data.submissions.filter(submission => submission.status === 'Pending Review');
   const actionBlockers = data.assets.filter(assetNeedsAction).length;
@@ -4587,7 +5101,7 @@ export function OOHOperatorApp() {
         records: clientGapAssets.slice(0, 9).map(asset => assetMetricRecord(
           asset,
           `${asset.evidenceStatus}, client view ${getLastClientView(asset)}`,
-          'Client Pages',
+          'Clients',
           'Prepare Client Page',
           undefined,
           {
@@ -4600,10 +5114,10 @@ export function OOHOperatorApp() {
               : 'Approve proof first, then publish the asset to the secure evidence page.',
           },
         )),
-        action: 'Open Client Pages to publish approved proof, or approve pending evidence first if the asset is not ready.',
+        action: 'Open Clients to publish approved proof, or approve pending evidence first if the asset is not ready.',
         actionLabel: 'Prepare Client Evidence Page',
         actionAssetId: clientGapAssets[0]?.id ?? clientEvidenceAssets[0]?.id,
-        tab: 'Client Pages',
+        tab: 'Clients',
       },
       {
         id: 'gis-confidence',
@@ -4899,15 +5413,47 @@ export function OOHOperatorApp() {
       assetIds: campaignAssets.length ? campaignAssets.map(asset => asset.id) : [selectedAsset.id],
       status: 'Live',
     }));
-    setActiveTab('Client Pages');
+    setActiveTab('Clients');
+  };
+
+  const handleCreateClientPageForBooking = (row: OOHClientBookingRow) => {
+    setSelectedAssetId(row.primaryAsset.id);
+    void runMutation(() => createOOHClientPage({
+      client: row.client,
+      campaign: row.campaign,
+      title: `${row.campaign} evidence page`,
+      assetIds: row.assets.map(asset => asset.id),
+      status: 'Live',
+    }));
+    setActiveTab('Clients');
   };
 
   const copyLink = async (path: string) => {
+    const shareUrl = absolutePath(path);
+    let copied = false;
     try {
-      await navigator.clipboard.writeText(absolutePath(path));
+      await navigator.clipboard.writeText(shareUrl);
+      copied = true;
     } catch {
-      // Clipboard may be blocked by the browser.
+      const helper = document.createElement('textarea');
+      helper.value = shareUrl;
+      helper.setAttribute('readonly', '');
+      helper.style.position = 'fixed';
+      helper.style.opacity = '0';
+      document.body.appendChild(helper);
+      helper.select();
+      try {
+        copied = document.execCommand('copy');
+      } catch {
+        copied = false;
+      } finally {
+        document.body.removeChild(helper);
+      }
     }
+    setCopyNotice({ path, copied });
+    window.setTimeout(() => {
+      setCopyNotice(current => current?.path === path ? null : current);
+    }, 2200);
   };
 
   const focusAssetForSurvey = () => {
@@ -4948,7 +5494,7 @@ export function OOHOperatorApp() {
   const openClientPagesForSelectedAsset = () => {
     if (!selectedAsset) return;
     setSelectedAssetId(selectedAsset.id);
-    setActiveTab('Client Pages');
+    setActiveTab('Clients');
     window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
   };
   const openLocationAssetInGIS = (asset: OOHAsset) => {
@@ -5375,7 +5921,7 @@ export function OOHOperatorApp() {
                           <QrCode size={14} /> Open Mobile Capture
                         </a>
                         <button className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold text-white" onClick={() => void copyLink(link)}>
-                          <Copy size={14} /> Copy Link
+                          <Copy size={14} /> {copyNotice?.path === link ? (copyNotice.copied ? 'Copied' : 'Copy blocked') : 'Copy Link'}
                         </button>
                       </div>
                     </div>
@@ -5519,70 +6065,160 @@ export function OOHOperatorApp() {
           </section>
         )}
 
-        {activeTab === 'Client Pages' && (
-          <section className="grid gap-5 xl:grid-cols-[1fr_0.85fr]">
-            <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <h2 className="text-xl font-black text-white">Secure Client Evidence Pages</h2>
-                <button className="inline-flex items-center gap-2 rounded-lg bg-[#E11D2E] px-3 py-2 text-sm font-bold text-white" onClick={handleCreateClientPage} disabled={!selectedAsset || busy}>
-                  <Link2 size={16} /> Generate Page
-                </button>
+        {activeTab === 'Clients' && (
+          <section className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#7EB8F7]">Active clients</p>
+                <h2 className="mt-1 text-2xl font-black text-white">Campaign bookings and client share links</h2>
+                <p className="mt-2 max-w-4xl text-sm leading-6 text-[#9DB4D0]">
+                  One row per active client campaign, with booked assets, installation/proof state and the evidence link the account team can share.
+                </p>
               </div>
-              <div className="mt-4 grid gap-3">
-                {data.clientPages.map(page => {
-                  const path = `/ooh/client/${page.token}`;
-                  return (
-                    <div key={page.token} className="rounded-lg border border-white/10 bg-[#07111F] p-4">
-                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                        <div>
-                          <p className="text-xs font-black uppercase tracking-wide text-[#7A94B4]">{page.client}</p>
-                          <h3 className="mt-1 text-lg font-black text-white">{page.title}</h3>
-                          <p className="mt-1 text-sm text-[#9DB4D0]">{page.assetIds.length} assets - expires {formatDate(page.expiresAt)}</p>
-                        </div>
-                        <Pill>{page.status}</Pill>
-                      </div>
-                      <div className="mt-4 grid gap-2 md:grid-cols-3">
-                        <div className="rounded-lg border border-white/10 bg-[#0B172A] p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Proof ready</p><p className="mt-1 text-xl font-black text-white">{page.proofReady}</p></div>
-                        <div className="rounded-lg border border-white/10 bg-[#0B172A] p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Survey score</p><p className="mt-1 text-xl font-black text-white">{page.surveyScore}</p></div>
-                        <div className="rounded-lg border border-white/10 bg-[#0B172A] p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Open items</p><p className="mt-1 text-xl font-black text-white">{page.openItems}</p></div>
-                      </div>
-                      <div className="mt-3 grid gap-2 md:grid-cols-3">
-                        <div className="rounded-lg border border-white/10 bg-[#0B172A] p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Viewer count</p><p className="mt-1 text-sm font-black text-white">{page.viewerCount ?? 0}</p></div>
-                        <div className="rounded-lg border border-white/10 bg-[#0B172A] p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Last viewed</p><p className="mt-1 text-sm font-black text-white">{page.lastViewedAt ? formatDate(page.lastViewedAt) : 'Awaiting client'}</p></div>
-                        <div className="rounded-lg border border-white/10 bg-[#0B172A] p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Access</p><p className="mt-1 text-sm font-black text-white">{page.accessState ?? 'Active'}</p></div>
-                      </div>
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        <a className="inline-flex items-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-xs font-bold text-white" href={path}>
-                          <Eye size={14} /> Open Client Page
-                        </a>
-                        <button className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold text-white" onClick={() => void copyLink(path)}>
-                          <Copy size={14} /> Copy Link
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+              <div className="inline-flex w-fit items-center gap-2 rounded-full border border-blue-300/20 bg-blue-300/10 px-4 py-2 text-sm font-bold text-blue-100">
+                <Globe2 size={16} /> {clientBookingRows.length} active bookings
               </div>
             </div>
 
-            <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
-              <h2 className="text-xl font-black text-white">Client Share Controls</h2>
-              <div className="mt-4 grid gap-3">
-                {[
-                  ['Secure token', 'Share links are tokenized and can be regenerated per campaign.'],
-                  ['Expiry window', 'Every evidence page carries access expiry and client scope.'],
-                  ['Published proof only', 'Client pages show approved evidence and keep internal rework hidden.'],
-                  ['Access log', 'Viewer count, last-viewed timestamp and export history support dispute prevention.'],
-                  ['Evidence timeline', 'Clients see installation proof, survey events and resolved exceptions.'],
-                  ['Export pack', 'Operators can download a campaign proof pack from reports.'],
-                ].map(([title, text]) => (
-                  <div key={title} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
-                    <p className="text-sm font-black text-white">{title}</p>
-                    <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{text}</p>
-                  </div>
-                ))}
-              </div>
+            <div className="mt-5 overflow-x-auto rounded-lg border border-white/10">
+              <table className="w-full min-w-[1080px] border-collapse text-left text-sm">
+                <thead className="bg-[#07111F] text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">
+                  <tr>
+                    <th className="px-3 py-3">Client</th>
+                    <th className="px-3 py-3">Campaign</th>
+                    <th className="px-3 py-3">Outdoor asset booked</th>
+                    <th className="px-3 py-3">Market / route</th>
+                    <th className="px-3 py-3">Duration</th>
+                    <th className="px-3 py-3">Install / proof</th>
+                    <th className="px-3 py-3">Evidence page</th>
+                    <th className="px-3 py-3">Last client view</th>
+                    <th className="px-3 py-3 text-right">Share actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {clientBookingRows.map(row => {
+                    const path = row.page ? `/ooh/client/${row.page.token}` : '';
+                    const selected = row.assets.some(asset => asset.id === selectedAssetId);
+                    return (
+                      <tr
+                        key={row.key}
+                        tabIndex={0}
+                        className={`cursor-pointer border-t border-white/10 transition hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#7EB8F7] ${selected ? 'bg-[#2E7FFF]/8' : 'bg-transparent'}`}
+                        onClick={() => setSelectedAssetId(row.primaryAsset.id)}
+                        onKeyDown={event => {
+                          if (event.target !== event.currentTarget) return;
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            setSelectedAssetId(row.primaryAsset.id);
+                          }
+                        }}
+                      >
+                        <td className="px-3 py-4 align-top">
+                          <p className="font-black text-white">{row.client}</p>
+                          <p className="mt-1 max-w-40 truncate text-xs text-[#7A94B4]">{row.primaryAsset.buyerContact ?? 'Buyer contact pending'}</p>
+                        </td>
+                        <td className="px-3 py-4 align-top">
+                          <p className="font-black text-white">{row.campaign}</p>
+                          <p className="mt-1 text-xs text-[#7A94B4]">{row.assets.length} booked face{row.assets.length === 1 ? '' : 's'}</p>
+                        </td>
+                        <td className="px-3 py-4 align-top">
+                          <p className="max-w-52 font-black text-white">{clientBookingAssetLabel(row)}</p>
+                          <p className="mt-1 text-xs text-[#7A94B4]">{row.primaryAsset.format} - {row.primaryAsset.dimensions}</p>
+                        </td>
+                        <td className="px-3 py-4 align-top">
+                          <p className="max-w-44 font-bold text-[#CFE3FA]">{clientBookingMarketRoute(row)}</p>
+                          <p className="mt-1 text-xs text-[#7A94B4]">{row.primaryAsset.address}</p>
+                        </td>
+                        <td className="px-3 py-4 align-top">
+                          <p className="font-black text-white">{clientBookingDuration(row)}</p>
+                          <p className="mt-1 text-xs text-[#7A94B4]">{row.primaryAsset.installSla ?? 'Install requirement pending'}</p>
+                        </td>
+                        <td className="px-3 py-4 align-top">
+                          <div className="flex flex-wrap gap-2">
+                            <Pill tone={row.installState === 'Installed' ? statusTone('Installed') : statusTone('Pending')}>{row.installState}</Pill>
+                            <Pill tone={row.proofState === 'Ready' ? statusTone('Ready') : statusTone('Pending')}>{row.proofState}</Pill>
+                          </div>
+                          <p className={`mt-2 text-xs font-bold ${row.openItems ? 'text-amber-100' : 'text-emerald-200'}`}>
+                            {row.openItems ? `${row.openItems} open action${row.openItems === 1 ? '' : 's'}` : 'Client proof clear'}
+                          </p>
+                        </td>
+                        <td className="px-3 py-4 align-top">
+                          {row.page ? (
+                            <>
+                              <Pill>{row.page.status}</Pill>
+                              <p className="mt-2 text-xs text-[#7A94B4]">
+                                Expires {formatDate(row.page.expiresAt)} | {row.page.viewerCount ?? 0} view{(row.page.viewerCount ?? 0) === 1 ? '' : 's'}
+                              </p>
+                            </>
+                          ) : (
+                            <>
+                              <Pill tone="border-amber-300/25 bg-amber-300/10 text-amber-100">No link</Pill>
+                              <p className="mt-2 text-xs text-[#7A94B4]">Generate when proof is ready to share.</p>
+                            </>
+                          )}
+                        </td>
+                        <td className="px-3 py-4 align-top">
+                          <p className="font-bold text-[#CFE3FA]">
+                            {row.page?.lastViewedAt
+                              ? formatDateTime(row.page.lastViewedAt)
+                              : row.primaryAsset.lastClientView
+                                ? formatDateTime(row.primaryAsset.lastClientView)
+                                : 'Not viewed yet'}
+                          </p>
+                          <p className="mt-1 text-xs text-[#7A94B4]">{row.page?.accessState ?? 'Access not issued'}</p>
+                        </td>
+                        <td className="px-3 py-4 align-top">
+                          <div className="flex justify-end gap-2">
+                            {row.page ? (
+                              <>
+                                <a
+                                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-xs font-black text-white hover:bg-[#4B91FF]"
+                                  href={path}
+                                  onClick={event => event.stopPropagation()}
+                                >
+                                  <Eye size={14} /> Open Page
+                                </a>
+                                <button
+                                  type="button"
+                                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-black text-white hover:bg-white/10"
+                                  onClick={event => {
+                                    event.stopPropagation();
+                                    void copyLink(path);
+                                  }}
+                                >
+                                  <Copy size={14} /> {copyNotice?.path === path ? (copyNotice.copied ? 'Copied' : 'Copy blocked') : 'Copy Link'}
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[#E11D2E] px-3 py-2 text-xs font-black text-white hover:bg-[#ff3445] disabled:cursor-not-allowed disabled:opacity-60"
+                                onClick={event => {
+                                  event.stopPropagation();
+                                  handleCreateClientPageForBooking(row);
+                                }}
+                                disabled={busy}
+                              >
+                                <Link2 size={14} /> Generate Link
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
+
+            {clientBookingRows.length === 0 && (
+              <div className="mt-5 rounded-lg border border-dashed border-blue-300/25 bg-[#07111F] p-6 text-center">
+                <p className="text-lg font-black text-white">No active booked campaigns yet</p>
+                <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-[#9DB4D0]">
+                  Start a campaign from the header or assign a client, campaign and future booking dates to an asset. It will appear here with client-share actions.
+                </p>
+              </div>
+            )}
           </section>
         )}
 
@@ -5594,7 +6230,7 @@ export function OOHOperatorApp() {
             onOpenAssets={() => setActiveTab('Assets')}
             onOpenSurveys={() => setActiveTab('Surveys')}
             onOpenEvidence={() => setActiveTab('Evidence')}
-            onOpenClientPages={() => setActiveTab('Client Pages')}
+            onOpenClientPages={() => setActiveTab('Clients')}
           />
         )}
 
@@ -5606,7 +6242,7 @@ export function OOHOperatorApp() {
             onOpenAssets={() => navigateToTab('Assets')}
             onOpenSurveys={() => navigateToTab('Surveys')}
             onOpenEvidence={() => navigateToTab('Evidence')}
-            onOpenClientPages={() => navigateToTab('Client Pages')}
+            onOpenClientPages={() => navigateToTab('Clients')}
             onOpenWorkOrders={() => navigateToTab('Work Orders')}
           />
         )}
@@ -5628,22 +6264,27 @@ export function OOHOperatorApp() {
             onOpenGIS={() => setActiveTab('GIS')}
             onOpenSurveys={() => setActiveTab('Surveys')}
             onOpenEvidence={() => setActiveTab('Evidence')}
-            onOpenClientPages={() => setActiveTab('Client Pages')}
+            onOpenClientPages={() => setActiveTab('Clients')}
             onOpenVendors={() => setActiveTab('Vendors')}
           />
         )}
 
         {activeTab === 'Reports' && (
           <section className="grid gap-5 xl:grid-cols-3">
-            {reportCards.map(({ title, text, icon: Icon }) => (
-              <div key={title} className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
+            {reportCards.map(({ id, title, text, icon: Icon }) => (
+              <div key={id} className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
                 <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-blue-400/20 bg-blue-400/10 text-blue-100">
                   <Icon size={22} />
                 </div>
                 <h2 className="mt-4 text-lg font-black text-white">{title}</h2>
                 <p className="mt-2 text-sm leading-6 text-[#9DB4D0]">{text}</p>
-                <button className="mt-4 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold text-white">
-                  <Download size={15} /> Export
+                <button
+                  type="button"
+                  aria-label={`Preview ${title}`}
+                  className="mt-4 inline-flex min-h-10 items-center gap-2 rounded-lg bg-[#2E7FFF] px-4 py-2 text-sm font-black text-white hover:bg-[#4B91FF]"
+                  onClick={() => setActiveReportId(id)}
+                >
+                  <Eye size={15} /> Preview Report
                 </button>
               </div>
             ))}
@@ -5658,6 +6299,7 @@ export function OOHOperatorApp() {
         onOpenGIS={openLocationAssetInGIS}
         onAssignSurvey={assignSurveyFromLocation}
       />
+      <OOHReportPreviewModal report={activeReportPreview} onClose={() => setActiveReportId(null)} />
       {assetModalOpen && (
         <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" role="presentation" onClick={closeAssetIntake}>
           <div

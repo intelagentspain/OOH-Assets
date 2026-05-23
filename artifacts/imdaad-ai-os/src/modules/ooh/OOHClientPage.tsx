@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, BarChart3, Camera, CarFront, CheckCircle2, ExternalLink, FileCheck2, Globe2, Image, MapPin, Route, ShieldCheck, Timer, TriangleAlert } from 'lucide-react';
+import { Activity, BarChart3, Camera, CarFront, CheckCircle2, ExternalLink, FileCheck2, Image, MapPin, Route, ShieldCheck, Timer, TriangleAlert } from 'lucide-react';
 import { CircleMarker, MapContainer, Popup, TileLayer } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import { fetchOOHClientPage } from './api';
@@ -70,12 +70,13 @@ function ClientMap({ assets }: { assets: OOHAsset[] }) {
   );
 }
 
-function Metric({ label, value, icon: Icon }: { label: string; value: string | number; icon: typeof CheckCircle2 }) {
+function Metric({ label, value, helper, icon: Icon }: { label: string; value: string | number; helper?: string; icon: typeof CheckCircle2 }) {
   return (
     <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
       <Icon size={20} className="text-[#7EB8F7]" />
       <p className="mt-3 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{value}</p>
       <p className="mt-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">{label}</p>
+      {helper && <p className="mt-2 text-xs leading-5 text-[#9DB4D0]">{helper}</p>}
     </div>
   );
 }
@@ -436,7 +437,6 @@ export function OOHClientPage({ token }: { token: string }) {
   }, [token]);
 
   const { page, assets, submissions } = payload;
-  const publishedSubmissions = submissions.filter(submission => submission.status === 'Approved' && submission.clientPublishStatus !== 'Blocked');
   const pendingItems = assets.filter(asset => asset.evidenceStatus !== 'Ready').length;
   const galleryItems = assets.flatMap(asset => galleryItemsForAsset(asset, submissions));
 
@@ -462,10 +462,10 @@ export function OOHClientPage({ token }: { token: string }) {
 
       <main className="mx-auto max-w-6xl px-4 py-5">
         <section className="grid gap-3 md:grid-cols-4">
-          <Metric label="Campaign Assets" value={assets.length} icon={MapPin} />
-          <Metric label="Proof Ready" value={page.proofReady} icon={CheckCircle2} />
-          <Metric label="Survey Score" value={`${page.surveyScore}%`} icon={FileCheck2} />
-          <Metric label="Open Items" value={pendingItems} icon={pendingItems ? TriangleAlert : ShieldCheck} />
+          <Metric label="Booked Assets" value={assets.length} helper="Assets covered by this client evidence link." icon={MapPin} />
+          <Metric label="Approved Proof" value={`${page.proofReady}/${assets.length}`} helper="Booked assets with client-visible proof attached." icon={CheckCircle2} />
+          <Metric label="Latest Inspection" value={`${page.surveyScore}%`} helper="Most recent approved quality inspection score." icon={FileCheck2} />
+          <Metric label="Attention Items" value={pendingItems} helper="Assets still missing approved client evidence." icon={pendingItems ? TriangleAlert : ShieldCheck} />
         </section>
 
         <section className="mt-5 grid gap-3 md:grid-cols-4">
@@ -537,43 +537,6 @@ export function OOHClientPage({ token }: { token: string }) {
         </section>
 
         <CarCountAnalytics assets={assets} />
-
-        <section className="mt-5 rounded-lg border border-white/10 bg-[#0B172A] p-4">
-          <div className="flex items-center gap-2">
-            <Globe2 size={18} className="text-[#7EB8F7]" />
-            <h2 className="text-xl font-black text-white">Survey Results</h2>
-          </div>
-          <div className="mt-4 overflow-hidden rounded-lg border border-white/10">
-            <table className="w-full min-w-[640px] border-collapse text-left text-sm">
-              <thead className="bg-[#07111F] text-[11px] uppercase tracking-wide text-[#7A94B4]">
-                <tr>
-                  <th className="px-3 py-3">Submission</th>
-                  <th className="px-3 py-3">Asset</th>
-                  <th className="px-3 py-3">Score</th>
-                  <th className="px-3 py-3">Status</th>
-                  <th className="px-3 py-3">Evidence</th>
-                </tr>
-              </thead>
-              <tbody>
-                {publishedSubmissions.map(submission => (
-                  <tr key={submission.id} className="border-t border-white/10">
-                    <td className="px-3 py-3 font-mono text-xs text-[#B8C7DB]">{submission.id}</td>
-                    <td className="px-3 py-3 text-white">{assets.find(asset => asset.id === submission.assetId)?.name ?? submission.assetId}</td>
-                    <td className="px-3 py-3 font-black text-white">{submission.score}</td>
-                    <td className="px-3 py-3"><span className={`rounded-full border px-2.5 py-1 text-[11px] font-bold ${pillClass(submission.status)}`}>{submission.status}</span></td>
-                    <td className="px-3 py-3 text-[#B8C7DB]">{submission.evidence.filter(item => item.clientPublishStatus !== 'Blocked').length} files</td>
-                  </tr>
-                ))}
-                {publishedSubmissions.length === 0 && (
-                  <tr className="border-t border-white/10">
-                    <td colSpan={5} className="px-3 py-6 text-center text-[#9DB4D0]">No survey submissions have been published to this client page yet.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          <p className="mt-3 text-xs text-[#7A94B4]">{publishedSubmissions.length} approved submissions are included in this secure campaign view.</p>
-        </section>
 
         <section className="mt-5 rounded-lg border border-white/10 bg-[#0B172A] p-4">
           <h2 className="text-xl font-black text-white">Export and Access Log</h2>
