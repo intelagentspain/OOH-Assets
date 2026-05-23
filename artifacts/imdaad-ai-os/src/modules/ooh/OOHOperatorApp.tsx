@@ -3604,7 +3604,7 @@ function OOHWorkOrders({
 }
 
 type OOHObligationStatus = 'Overdue' | 'Due Soon' | 'In Progress' | 'Met';
-type OOHObligationCategory = 'Permits' | 'Installation' | 'Proof' | 'Client Reporting' | 'Inspection' | 'DOOH Playback';
+type OOHObligationCategory = 'Permits' | 'Authorisations' | 'Installation' | 'Proof' | 'Client Reporting' | 'Inspection' | 'DOOH Playback';
 
 interface OOHObligation {
   id: string;
@@ -3626,7 +3626,7 @@ interface OOHObligation {
   timeline: Array<{ date: string; note: string }>;
 }
 
-const obligationCategories: Array<'All Categories' | OOHObligationCategory> = ['All Categories', 'Permits', 'Installation', 'Proof', 'Client Reporting', 'Inspection', 'DOOH Playback'];
+const obligationCategories: Array<'All Categories' | OOHObligationCategory> = ['All Categories', 'Permits', 'Authorisations', 'Installation', 'Proof', 'Client Reporting', 'Inspection', 'DOOH Playback'];
 const obligationStatuses: Array<'All Status' | OOHObligationStatus> = ['All Status', 'Overdue', 'Due Soon', 'In Progress', 'Met'];
 
 function obligationStatusTone(status: OOHObligationStatus): string {
@@ -3652,6 +3652,18 @@ function obligationDueStatus(value: string, met: boolean, inProgress = false, du
   return 'In Progress';
 }
 
+function assetNeedsTrafficAuthorization(asset: OOHAsset): boolean {
+  return /road|bridge|gantry|highway|corridor|street|jbr|corniche|zayed|airport/i.test(`${asset.name} ${asset.format} ${asset.route} ${asset.address}`);
+}
+
+function assetNeedsWorkAtHeightPermit(asset: OOHAsset): boolean {
+  return /billboard|bridge|wall|gantry|unipole|wrap/i.test(`${asset.name} ${asset.format}`);
+}
+
+function assetNeedsPowerAuthorization(asset: OOHAsset): boolean {
+  return asset.illumination !== 'Non-illuminated' && asset.powerStatus !== 'Not Required';
+}
+
 function buildOOHObligations(data: OOHBootstrap): OOHObligation[] {
   const livePageAssetIds = new Set(data.clientPages.filter(page => page.status === 'Live').flatMap(page => page.assetIds));
   const obligations = data.assets.flatMap(asset => {
@@ -3659,6 +3671,8 @@ function buildOOHObligations(data: OOHBootstrap): OOHObligation[] {
     const latestSubmission = latestInspectionForAsset(asset.id, data.submissions);
     const installOwner = assetAttributeValue(asset, 'Install owner') ?? linkedAssignment?.team ?? 'Operations team';
     const installDue = assetAttributeValue(asset, 'Installation due') ?? dateOffsetInputValue(asset.bookedFrom, -1, 3);
+    const authorizationDue = dateOffsetInputValue(asset.bookedFrom, -5, 2);
+    const safetyDue = dateOffsetInputValue(asset.bookedFrom, -2, 3);
     const proofDue = dateOffsetInputValue(asset.bookedFrom, 1, 4);
     const clientDue = dateOffsetInputValue(asset.bookedFrom, 2, 5);
     const surveyDue = asset.nextSurveyDue;
@@ -3673,7 +3687,7 @@ function buildOOHObligations(data: OOHBootstrap): OOHObligation[] {
         code: `OBL-PER-${asset.id.split('-').slice(-1)[0]}`,
         title: 'Permit and site-right validity',
         description: 'Confirm the asset permit, NOC, site-owner right, and expiry window before installation, continued display, or client publishing.',
-        category: 'Permits',
+        category: 'Authorisations',
         status: asset.permitStatus === 'Valid' && daysUntil(asset.permitExpiry) > 30 ? 'Met' : daysUntil(asset.permitExpiry) < 0 || asset.permitStatus === 'Expired' ? 'Overdue' : 'Due Soon',
         dueDate: asset.permitExpiry,
         owner: asset.owner,
@@ -3689,6 +3703,50 @@ function buildOOHObligations(data: OOHBootstrap): OOHObligation[] {
           { code: 'PUBLISH-BLOCK', title: 'Client page publish block when permit is expired or pending', status: asset.permitStatus === 'Valid' ? 'Clear' : 'Active' },
         ],
         timeline: [{ date: formatDate(asset.permitExpiry), note: `Permit status: ${asset.permitStatus}.` }, ...baseTimeline],
+      },
+      {
+        id: `OBL-MUNICIPAL-${asset.id}`,
+        code: `OBL-MUN-${asset.id.split('-').slice(-1)[0]}`,
+        title: 'Municipality display authorisation',
+        description: 'Confirm the local advertising/display permit covers the booked face, format, location, campaign dates, and any municipality-specific conditions.',
+        category: 'Authorisations',
+        status: asset.permitStatus === 'Valid' ? 'Met' : asset.permitStatus === 'Expired' ? 'Overdue' : obligationDueStatus(authorizationDue, false, asset.permitStatus === 'Pending', 5),
+        dueDate: authorizationDue,
+        owner: 'Compliance coordinator',
+        authority: `${asset.market} municipality / advertising authority`,
+        market: asset.market,
+        asset,
+        campaign: campaignLabel,
+        client: asset.client,
+        action: asset.permitStatus === 'Valid' ? 'Keep the municipal permit reference attached to the asset record.' : 'Request or update the municipality display authorisation before installation or publication.',
+        evidenceRequired: ['Municipality permit number', 'Approved asset face / format', 'Campaign or display validity dates', 'Location reference matching GIS', 'Conditions or restrictions if any'],
+        linkedControls: [
+          { code: 'MUNICIPAL-PERMIT', title: `${asset.market} display authorisation`, status: asset.permitStatus },
+          { code: asset.id, title: asset.name, status: asset.status },
+        ],
+        timeline: [{ date: formatDate(authorizationDue), note: 'Municipality authorisation should be cleared before field work starts.' }, ...baseTimeline],
+      },
+      {
+        id: `OBL-SITE-ACCESS-${asset.id}`,
+        code: `OBL-SIT-${asset.id.split('-').slice(-1)[0]}`,
+        title: 'Site owner access approval',
+        description: 'Confirm landlord, mall, building, or site-owner access approval for installation crew entry, working hours, lift/boom access, and security requirements.',
+        category: 'Permits',
+        status: asset.installStatus === 'Installed' || (asset.permitStatus === 'Valid' && asset.owner === 'OOH Assets') ? 'Met' : obligationDueStatus(authorizationDue, false, asset.installStatus === 'Scheduled' || asset.installStatus === 'In Progress', 5),
+        dueDate: authorizationDue,
+        owner: installOwner,
+        authority: asset.owner === 'OOH Assets' ? 'Internal site operations' : asset.owner,
+        market: asset.market,
+        asset,
+        campaign: campaignLabel,
+        client: asset.client,
+        action: asset.installStatus === 'Installed' ? 'Keep site access approval available with the work order trail.' : 'Confirm site-owner access window and crew entry requirements before dispatch.',
+        evidenceRequired: ['Site-owner approval email/reference', 'Crew access window', 'Security or induction requirements', 'Lift/boom or equipment approval if required', 'Contact person on site'],
+        linkedControls: [
+          { code: 'SITE-ACCESS', title: `${asset.owner} access approval`, status: asset.installStatus === 'Installed' ? 'Closed' : 'Required' },
+          { code: 'INSTALL-OWNER', title: installOwner, status: asset.installStatus },
+        ],
+        timeline: [{ date: formatDate(authorizationDue), note: 'Access approval required before installation team dispatch.' }, ...baseTimeline],
       },
       {
         id: `OBL-INSTALL-${asset.id}`,
@@ -3779,6 +3837,82 @@ function buildOOHObligations(data: OOHBootstrap): OOHObligation[] {
         timeline: [{ date: formatDate(surveyDue), note: 'Next recurring inspection due.' }, ...baseTimeline],
       },
     ];
+
+    if (assetNeedsTrafficAuthorization(asset)) {
+      rows.push({
+        id: `OBL-TRAFFIC-${asset.id}`,
+        code: `OBL-TRF-${asset.id.split('-').slice(-1)[0]}`,
+        title: 'Traffic / roadside work authorisation',
+        description: 'Confirm road, bridge, roadside, or public-realm work approval for crew access, cones/barriers, lane impact, and permitted working hours.',
+        category: 'Permits',
+        status: asset.installStatus === 'Installed' && asset.permitStatus === 'Valid' ? 'Met' : obligationDueStatus(safetyDue, false, asset.installStatus === 'In Progress' || asset.installStatus === 'Scheduled', 4),
+        dueDate: safetyDue,
+        owner: installOwner,
+        authority: `${asset.market} roads / traffic authority`,
+        market: asset.market,
+        asset,
+        campaign: campaignLabel,
+        client: asset.client,
+        action: asset.installStatus === 'Installed' ? 'Keep traffic access approval attached to the closed work order.' : 'Confirm roadside or public-realm access approval before the crew goes to site.',
+        evidenceRequired: ['Roadside access permit or NOC', 'Approved work timing', 'Crew traffic-management plan', 'Route/location sketch', 'Emergency contact or site marshal if required'],
+        linkedControls: [
+          { code: 'ROUTE', title: asset.route, status: asset.market },
+          { code: 'WORK-ORDER', title: assetAttributeValue(asset, 'Work order assignment') ?? 'Installation work order required', status: asset.installStatus },
+        ],
+        timeline: [{ date: formatDate(safetyDue), note: 'Traffic or roadside approval required before crew mobilisation.' }, ...baseTimeline],
+      });
+    }
+
+    if (assetNeedsWorkAtHeightPermit(asset)) {
+      rows.push({
+        id: `OBL-SAFETY-${asset.id}`,
+        code: `OBL-HSE-${asset.id.split('-').slice(-1)[0]}`,
+        title: 'Work-at-height / safety method approval',
+        description: 'Confirm method statement, risk assessment, supervisor approval, and equipment certification before elevated installation or maintenance work.',
+        category: 'Installation',
+        status: asset.installStatus === 'Installed' ? 'Met' : obligationDueStatus(safetyDue, false, asset.installStatus === 'In Progress' || asset.installStatus === 'Scheduled', 3),
+        dueDate: safetyDue,
+        owner: installOwner,
+        authority: 'HSE / site safety reviewer',
+        market: asset.market,
+        asset,
+        campaign: campaignLabel,
+        client: asset.client,
+        action: asset.installStatus === 'Installed' ? 'Retain the safety pack with the completed installation record.' : 'Approve the method statement and equipment access plan before assigning the work order.',
+        evidenceRequired: ['Method statement', 'Risk assessment', 'Supervisor name', 'Equipment certification', 'PPE / safety checklist', 'Site induction record if required'],
+        linkedControls: [
+          { code: 'HSE-PACK', title: 'Safety method statement and risk assessment', status: asset.installStatus === 'Installed' ? 'Closed' : 'Required' },
+          { code: 'FORMAT', title: `${asset.format} - ${asset.dimensions}`, status: asset.installStatus },
+        ],
+        timeline: [{ date: formatDate(safetyDue), note: 'Safety method approval required before elevated work.' }, ...baseTimeline],
+      });
+    }
+
+    if (assetNeedsPowerAuthorization(asset)) {
+      const powerReady = asset.powerStatus === 'Online';
+      rows.push({
+        id: `OBL-POWER-${asset.id}`,
+        code: `OBL-PWR-${asset.id.split('-').slice(-1)[0]}`,
+        title: 'Electrical / power energisation approval',
+        description: 'Confirm power availability, electrical isolation/energisation approval, and responsible technician before illuminated or digital assets are treated as ready.',
+        category: asset.illumination === 'Digital' ? 'DOOH Playback' : 'Authorisations',
+        status: powerReady ? 'Met' : obligationDueStatus(safetyDue, false, asset.powerStatus === 'Online', 3),
+        dueDate: safetyDue,
+        owner: asset.illumination === 'Digital' ? 'Digital operations' : installOwner,
+        authority: 'Electrical / facilities authority',
+        market: asset.market,
+        asset,
+        campaign: campaignLabel,
+        client: asset.client,
+        action: powerReady ? 'Keep power approval and online state visible in the asset record.' : 'Confirm power approval and technician sign-off before proof or playback readiness is accepted.',
+        evidenceRequired: ['Power approval or facilities NOC', 'Technician sign-off', 'Isolation / energisation window', 'Panel or player power state', 'Photo of power/player status where applicable'],
+        linkedControls: [
+          { code: 'POWER', title: `Power state ${asset.powerStatus}`, status: asset.powerStatus },
+          { code: 'ILLUMINATION', title: asset.illumination, status: asset.playerStatus },
+        ],
+        timeline: [{ date: formatDate(safetyDue), note: 'Electrical approval required before lighting/player readiness can be closed.' }, ...baseTimeline],
+      });
+    }
 
     const isDigital = asset.format.toLowerCase().includes('digital') || asset.illumination === 'Digital' || asset.playerStatus !== 'Not Installed';
     if (isDigital) {
@@ -3880,7 +4014,7 @@ function OOHObligations({
           <div>
             <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#7EB8F7]">OOH obligation control</p>
             <h2 className="mt-1 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Obligations Register</h2>
-            <p className="mt-2 max-w-4xl text-sm leading-6 text-[#B8C7DB]">Track campaign, permit, installation, proof, inspection, client-reporting and DOOH playback obligations against every OOH asset.</p>
+            <p className="mt-2 max-w-4xl text-sm leading-6 text-[#B8C7DB]">Track permits, site access authorisations, traffic approvals, safety packs, installation, proof, inspections, client reporting and DOOH playback duties against every OOH asset.</p>
           </div>
           <button type="button" className="inline-flex items-center gap-2 rounded-lg bg-[#2E7FFF] px-4 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={() => openPrimaryAction(selected)}>
             Open Required Action <ExternalLink size={15} />
