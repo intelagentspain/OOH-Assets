@@ -4168,52 +4168,49 @@ function OOHObligations({
         </div>
 
         <aside className="space-y-4 2xl:sticky 2xl:top-5">
-          <div className="overflow-hidden rounded-lg border border-[#2E7FFF]/30 bg-[#0B172A] shadow-xl shadow-black/20">
-            <AssetPopupVisual asset={selected.asset} className="h-40 w-full" />
-            <div className="p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="font-mono text-[11px] font-black uppercase tracking-[0.18em] text-[#7EB8F7]">{selected.code}</p>
-                  <h3 className="mt-2 text-xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{selected.title}</h3>
-                  <p className="mt-2 text-sm leading-6 text-[#B8C7DB]">{selected.description}</p>
+          <div className="rounded-lg border border-[#2E7FFF]/30 bg-[#0B172A] p-4 shadow-xl shadow-black/20">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-mono text-[11px] font-black uppercase tracking-[0.18em] text-[#7EB8F7]">{selected.code}</p>
+                <h3 className="mt-2 text-xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{selected.title}</h3>
+                <p className="mt-2 text-sm leading-6 text-[#B8C7DB]">{selected.description}</p>
+              </div>
+              <Pill tone={obligationStatusTone(selected.status)}>{selected.status}</Pill>
+            </div>
+
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              {[
+                ['Asset', selected.asset.name],
+                ['Campaign', selected.campaign],
+                ['Client', selected.client],
+                ['Market', selected.market],
+                ['Category', selected.category],
+                ['Due date', formatDate(selected.dueDate)],
+                ['Owner', selected.owner],
+                ['Authority', selected.authority],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
+                  <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
+                  <p className="mt-1 text-sm font-black text-white">{value}</p>
                 </div>
-                <Pill tone={obligationStatusTone(selected.status)}>{selected.status}</Pill>
-              </div>
+              ))}
+            </div>
 
-              <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                {[
-                  ['Asset', selected.asset.name],
-                  ['Campaign', selected.campaign],
-                  ['Client', selected.client],
-                  ['Market', selected.market],
-                  ['Category', selected.category],
-                  ['Due date', formatDate(selected.dueDate)],
-                  ['Owner', selected.owner],
-                  ['Authority', selected.authority],
-                ].map(([label, value]) => (
-                  <div key={label} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
-                    <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
-                    <p className="mt-1 text-sm font-black text-white">{value}</p>
-                  </div>
-                ))}
-              </div>
+            <div className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/10 p-3">
+              <p className="text-[10px] font-black uppercase tracking-wide text-amber-100">Required action</p>
+              <p className="mt-2 text-sm leading-6 text-white">{selected.action}</p>
+            </div>
 
-              <div className="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/10 p-3">
-                <p className="text-[10px] font-black uppercase tracking-wide text-amber-100">Required action</p>
-                <p className="mt-2 text-sm leading-6 text-white">{selected.action}</p>
-              </div>
-
-              <div className="mt-4 flex flex-wrap gap-2">
-                <button type="button" className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={() => openPrimaryAction(selected)}>
-                  Open Action <ExternalLink size={14} />
-                </button>
-                <button type="button" className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-black text-white hover:bg-white/10" onClick={() => {
-                  onSelectAsset(selected.asset.id);
-                  onOpenAssets();
-                }}>
-                  Open Asset <Building2 size={14} />
-                </button>
-              </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button type="button" className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={() => openPrimaryAction(selected)}>
+                Open Action <ExternalLink size={14} />
+              </button>
+              <button type="button" className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-black text-white hover:bg-white/10" onClick={() => {
+                onSelectAsset(selected.asset.id);
+                onOpenAssets();
+              }}>
+                Open Asset <Building2 size={14} />
+              </button>
             </div>
           </div>
 
