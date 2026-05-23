@@ -949,7 +949,7 @@ function assetMetricRecord(
   };
 }
 
-function MetricCard({ metric, selected, onOpen }: { metric: MetricInsight; selected: boolean; onOpen: (metricId: string) => void }) {
+function MetricCard({ metric, selected, updatedAt, onOpen }: { metric: MetricInsight; selected: boolean; updatedAt: string; onOpen: (metricId: string) => void }) {
   const Icon = metric.icon;
   const toneClass = {
     blue: 'bg-blue-400/10 text-blue-200 border-blue-400/20',
@@ -975,6 +975,7 @@ function MetricCard({ metric, selected, onOpen }: { metric: MetricInsight; selec
       </div>
       <div className="mt-4 text-3xl font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{metric.value}</div>
       <p className="mt-1 min-h-[44px] text-sm leading-6 text-[#9DB4D0]">{metric.note}</p>
+      <MetricTimestamp updatedAt={updatedAt} className="mt-2" />
       <span className={`mt-auto inline-flex h-9 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-black transition ${
         selected
           ? 'border-[#7EB8F7] bg-[#2E7FFF] text-white'
@@ -994,11 +995,13 @@ function urgencyTone(urgency: MetricRecord['urgency']): string {
 
 function MetricInsightModal({
   metric,
+  updatedAt,
   onRunAction,
   onRunRecord,
   onClose,
 }: {
   metric: MetricInsight | null;
+  updatedAt: string;
   onRunAction: (metric: MetricInsight) => void;
   onRunRecord: (record: MetricRecord) => void;
   onClose: () => void;
@@ -1111,6 +1114,7 @@ function MetricInsightModal({
               <p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Current Value</p>
               <p className="mt-3 text-4xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{metric.value}</p>
               <p className="mt-2 text-sm leading-6 text-[#B8C7DB]">{metric.note}</p>
+              <MetricTimestamp updatedAt={updatedAt} />
             </div>
             <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
               <p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Why it matters</p>
@@ -1185,6 +1189,14 @@ function Pill({ children, tone, className = '' }: { children: string; tone?: str
   );
 }
 
+function MetricTimestamp({ updatedAt, className = '' }: { updatedAt: string; className?: string }) {
+  return (
+    <p className={`mt-3 text-[10px] font-black uppercase tracking-wide text-[#58708E] ${className}`}>
+      Updated {formatDateTime(updatedAt)}
+    </p>
+  );
+}
+
 function OOHReportPreviewModal({ report, onClose }: { report: OOHGeneratedReport | null; onClose: () => void }) {
   if (!report) return null;
 
@@ -1230,6 +1242,7 @@ function OOHReportPreviewModal({ report, onClose }: { report: OOHGeneratedReport
                 <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{item.label}</p>
                 <p className="mt-2 text-3xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{item.value}</p>
                 <p className="mt-2 text-xs leading-5 text-[#9DB4D0]">{item.helper}</p>
+                <MetricTimestamp updatedAt={report.generatedAt} />
               </div>
             ))}
           </div>
@@ -1982,6 +1995,7 @@ function LiveOperationsGisPanel({
   onOpenAssets,
   onOpenSurveys,
   onOpenEvidence,
+  onOpenObligations,
 }: {
   assets: OOHAsset[];
   assignments: OOHBootstrap['assignments'];
@@ -1992,6 +2006,7 @@ function LiveOperationsGisPanel({
   onOpenAssets: () => void;
   onOpenSurveys: () => void;
   onOpenEvidence: () => void;
+  onOpenObligations: () => void;
 }) {
   const center = useMemo<[number, number]>(() => {
     const selected = assets.find(asset => asset.id === selectedAssetId) ?? assets[0];
@@ -2002,6 +2017,7 @@ function LiveOperationsGisPanel({
   const [layerPanelOpen, setLayerPanelOpen] = useState(false);
   const [mapLayers, setMapLayers] = useState({ assets: true, crews: true, routes: true, hotspots: true });
   const [missionTick, setMissionTick] = useState(0);
+  const metricsUpdatedAt = useMemo(() => new Date().toISOString(), [assets, assignments, submissions]);
   const now = Date.now();
   const activeAssignments = assignments.filter(assignment => ['Active', 'In Progress', 'Submitted', 'Overdue'].includes(assignment.status));
   const proofGapAssets = assets.filter(asset => asset.evidenceStatus !== 'Ready');
@@ -2070,8 +2086,8 @@ function LiveOperationsGisPanel({
     { label: 'Permit Watch', value: String(permitAttentionAssets.length), detail: 'Needs compliance action', action: () => {
       const target = permitAttentionAssets[0];
       if (target) onSelectAsset(target.id);
-      onOpenAssets();
-    }, actionLabel: 'Review permits', icon: ShieldCheck, tone: 'amber' },
+      onOpenObligations();
+    }, actionLabel: 'Open obligations', icon: ShieldCheck, tone: 'amber' },
   ];
 
   return (
@@ -2117,6 +2133,7 @@ function LiveOperationsGisPanel({
                 <span className="text-[11px] font-black text-[#7EB8F7]">{card.actionLabel}</span>
               </div>
               <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{card.detail}</p>
+              <MetricTimestamp updatedAt={metricsUpdatedAt} />
             </button>
           );
         })}
@@ -2795,6 +2812,7 @@ function OOHVendorIntelligence({
   onSelectAsset: (assetId: string) => void;
 }) {
   const partners = useMemo(() => buildOOHVendorPartners(data.assets, data.assignments, data.submissions), [data.assets, data.assignments, data.submissions]);
+  const metricsUpdatedAt = useMemo(() => new Date().toISOString(), [partners]);
   const [filter, setFilter] = useState<OOHVendorFilter>('copilot');
   const [selectedPartnerId, setSelectedPartnerId] = useState(partners[0]?.id ?? '');
   const [activeAction, setActiveAction] = useState<OOHVendorAction>('action');
@@ -2886,6 +2904,7 @@ function OOHVendorIntelligence({
               <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
               <p className="mt-2 text-3xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{value}</p>
               <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{helper}</p>
+              <MetricTimestamp updatedAt={metricsUpdatedAt} />
               <div className={`mt-3 h-1 rounded-full border ${tone}`} />
             </div>
           ))}
@@ -3300,6 +3319,7 @@ function OOHWorkOrders({
   onOpenClientPages: () => void;
 }) {
   const workOrders = useMemo(() => buildOOHWorkOrders(data), [data]);
+  const metricsUpdatedAt = useMemo(() => new Date().toISOString(), [workOrders]);
   const [selectedOrderId, setSelectedOrderId] = useState('');
   const [filter, setFilter] = useState<OOHWorkOrderFilter>('all');
   const [search, setSearch] = useState('');
@@ -3388,6 +3408,7 @@ function OOHWorkOrders({
               <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
               <p className="mt-2 text-3xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{value}</p>
               <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{helper}</p>
+              <MetricTimestamp updatedAt={metricsUpdatedAt} />
             </button>
           ))}
         </div>
@@ -3602,7 +3623,7 @@ function OOHWorkOrders({
 }
 
 type OOHObligationStatus = 'Overdue' | 'Due Soon' | 'In Progress' | 'Met';
-type OOHObligationCategory = 'Permits' | 'Installation' | 'Proof' | 'Client Reporting' | 'Inspection' | 'DOOH Playback';
+type OOHObligationCategory = 'Permits' | 'Authorisations' | 'Installation' | 'Proof' | 'Client Reporting' | 'Inspection' | 'DOOH Playback';
 
 interface OOHObligation {
   id: string;
@@ -3624,7 +3645,7 @@ interface OOHObligation {
   timeline: Array<{ date: string; note: string }>;
 }
 
-const obligationCategories: Array<'All Categories' | OOHObligationCategory> = ['All Categories', 'Permits', 'Installation', 'Proof', 'Client Reporting', 'Inspection', 'DOOH Playback'];
+const obligationCategories: Array<'All Categories' | OOHObligationCategory> = ['All Categories', 'Permits', 'Authorisations', 'Installation', 'Proof', 'Client Reporting', 'Inspection', 'DOOH Playback'];
 const obligationStatuses: Array<'All Status' | OOHObligationStatus> = ['All Status', 'Overdue', 'Due Soon', 'In Progress', 'Met'];
 
 function obligationStatusTone(status: OOHObligationStatus): string {
@@ -3650,6 +3671,18 @@ function obligationDueStatus(value: string, met: boolean, inProgress = false, du
   return 'In Progress';
 }
 
+function assetNeedsTrafficAuthorization(asset: OOHAsset): boolean {
+  return /road|bridge|gantry|highway|corridor|street|jbr|corniche|zayed|airport/i.test(`${asset.name} ${asset.format} ${asset.route} ${asset.address}`);
+}
+
+function assetNeedsWorkAtHeightPermit(asset: OOHAsset): boolean {
+  return /billboard|bridge|wall|gantry|unipole|wrap/i.test(`${asset.name} ${asset.format}`);
+}
+
+function assetNeedsPowerAuthorization(asset: OOHAsset): boolean {
+  return asset.illumination !== 'Non-illuminated' && asset.powerStatus !== 'Not Required';
+}
+
 function buildOOHObligations(data: OOHBootstrap): OOHObligation[] {
   const livePageAssetIds = new Set(data.clientPages.filter(page => page.status === 'Live').flatMap(page => page.assetIds));
   const obligations = data.assets.flatMap(asset => {
@@ -3657,6 +3690,8 @@ function buildOOHObligations(data: OOHBootstrap): OOHObligation[] {
     const latestSubmission = latestInspectionForAsset(asset.id, data.submissions);
     const installOwner = assetAttributeValue(asset, 'Install owner') ?? linkedAssignment?.team ?? 'Operations team';
     const installDue = assetAttributeValue(asset, 'Installation due') ?? dateOffsetInputValue(asset.bookedFrom, -1, 3);
+    const authorizationDue = dateOffsetInputValue(asset.bookedFrom, -5, 2);
+    const safetyDue = dateOffsetInputValue(asset.bookedFrom, -2, 3);
     const proofDue = dateOffsetInputValue(asset.bookedFrom, 1, 4);
     const clientDue = dateOffsetInputValue(asset.bookedFrom, 2, 5);
     const surveyDue = asset.nextSurveyDue;
@@ -3671,7 +3706,7 @@ function buildOOHObligations(data: OOHBootstrap): OOHObligation[] {
         code: `OBL-PER-${asset.id.split('-').slice(-1)[0]}`,
         title: 'Permit and site-right validity',
         description: 'Confirm the asset permit, NOC, site-owner right, and expiry window before installation, continued display, or client publishing.',
-        category: 'Permits',
+        category: 'Authorisations',
         status: asset.permitStatus === 'Valid' && daysUntil(asset.permitExpiry) > 30 ? 'Met' : daysUntil(asset.permitExpiry) < 0 || asset.permitStatus === 'Expired' ? 'Overdue' : 'Due Soon',
         dueDate: asset.permitExpiry,
         owner: asset.owner,
@@ -3687,6 +3722,50 @@ function buildOOHObligations(data: OOHBootstrap): OOHObligation[] {
           { code: 'PUBLISH-BLOCK', title: 'Client page publish block when permit is expired or pending', status: asset.permitStatus === 'Valid' ? 'Clear' : 'Active' },
         ],
         timeline: [{ date: formatDate(asset.permitExpiry), note: `Permit status: ${asset.permitStatus}.` }, ...baseTimeline],
+      },
+      {
+        id: `OBL-MUNICIPAL-${asset.id}`,
+        code: `OBL-MUN-${asset.id.split('-').slice(-1)[0]}`,
+        title: 'Municipality display authorisation',
+        description: 'Confirm the local advertising/display permit covers the booked face, format, location, campaign dates, and any municipality-specific conditions.',
+        category: 'Authorisations',
+        status: asset.permitStatus === 'Valid' ? 'Met' : asset.permitStatus === 'Expired' ? 'Overdue' : obligationDueStatus(authorizationDue, false, asset.permitStatus === 'Pending', 5),
+        dueDate: authorizationDue,
+        owner: 'Compliance coordinator',
+        authority: `${asset.market} municipality / advertising authority`,
+        market: asset.market,
+        asset,
+        campaign: campaignLabel,
+        client: asset.client,
+        action: asset.permitStatus === 'Valid' ? 'Keep the municipal permit reference attached to the asset record.' : 'Request or update the municipality display authorisation before installation or publication.',
+        evidenceRequired: ['Municipality permit number', 'Approved asset face / format', 'Campaign or display validity dates', 'Location reference matching GIS', 'Conditions or restrictions if any'],
+        linkedControls: [
+          { code: 'MUNICIPAL-PERMIT', title: `${asset.market} display authorisation`, status: asset.permitStatus },
+          { code: asset.id, title: asset.name, status: asset.status },
+        ],
+        timeline: [{ date: formatDate(authorizationDue), note: 'Municipality authorisation should be cleared before field work starts.' }, ...baseTimeline],
+      },
+      {
+        id: `OBL-SITE-ACCESS-${asset.id}`,
+        code: `OBL-SIT-${asset.id.split('-').slice(-1)[0]}`,
+        title: 'Site owner access approval',
+        description: 'Confirm landlord, mall, building, or site-owner access approval for installation crew entry, working hours, lift/boom access, and security requirements.',
+        category: 'Permits',
+        status: asset.installStatus === 'Installed' || (asset.permitStatus === 'Valid' && asset.owner === 'OOH Assets') ? 'Met' : obligationDueStatus(authorizationDue, false, asset.installStatus === 'Scheduled' || asset.installStatus === 'In Progress', 5),
+        dueDate: authorizationDue,
+        owner: installOwner,
+        authority: asset.owner === 'OOH Assets' ? 'Internal site operations' : asset.owner,
+        market: asset.market,
+        asset,
+        campaign: campaignLabel,
+        client: asset.client,
+        action: asset.installStatus === 'Installed' ? 'Keep site access approval available with the work order trail.' : 'Confirm site-owner access window and crew entry requirements before dispatch.',
+        evidenceRequired: ['Site-owner approval email/reference', 'Crew access window', 'Security or induction requirements', 'Lift/boom or equipment approval if required', 'Contact person on site'],
+        linkedControls: [
+          { code: 'SITE-ACCESS', title: `${asset.owner} access approval`, status: asset.installStatus === 'Installed' ? 'Closed' : 'Required' },
+          { code: 'INSTALL-OWNER', title: installOwner, status: asset.installStatus },
+        ],
+        timeline: [{ date: formatDate(authorizationDue), note: 'Access approval required before installation team dispatch.' }, ...baseTimeline],
       },
       {
         id: `OBL-INSTALL-${asset.id}`,
@@ -3778,6 +3857,82 @@ function buildOOHObligations(data: OOHBootstrap): OOHObligation[] {
       },
     ];
 
+    if (assetNeedsTrafficAuthorization(asset)) {
+      rows.push({
+        id: `OBL-TRAFFIC-${asset.id}`,
+        code: `OBL-TRF-${asset.id.split('-').slice(-1)[0]}`,
+        title: 'Traffic / roadside work authorisation',
+        description: 'Confirm road, bridge, roadside, or public-realm work approval for crew access, cones/barriers, lane impact, and permitted working hours.',
+        category: 'Permits',
+        status: asset.installStatus === 'Installed' && asset.permitStatus === 'Valid' ? 'Met' : obligationDueStatus(safetyDue, false, asset.installStatus === 'In Progress' || asset.installStatus === 'Scheduled', 4),
+        dueDate: safetyDue,
+        owner: installOwner,
+        authority: `${asset.market} roads / traffic authority`,
+        market: asset.market,
+        asset,
+        campaign: campaignLabel,
+        client: asset.client,
+        action: asset.installStatus === 'Installed' ? 'Keep traffic access approval attached to the closed work order.' : 'Confirm roadside or public-realm access approval before the crew goes to site.',
+        evidenceRequired: ['Roadside access permit or NOC', 'Approved work timing', 'Crew traffic-management plan', 'Route/location sketch', 'Emergency contact or site marshal if required'],
+        linkedControls: [
+          { code: 'ROUTE', title: asset.route, status: asset.market },
+          { code: 'WORK-ORDER', title: assetAttributeValue(asset, 'Work order assignment') ?? 'Installation work order required', status: asset.installStatus },
+        ],
+        timeline: [{ date: formatDate(safetyDue), note: 'Traffic or roadside approval required before crew mobilisation.' }, ...baseTimeline],
+      });
+    }
+
+    if (assetNeedsWorkAtHeightPermit(asset)) {
+      rows.push({
+        id: `OBL-SAFETY-${asset.id}`,
+        code: `OBL-HSE-${asset.id.split('-').slice(-1)[0]}`,
+        title: 'Work-at-height / safety method approval',
+        description: 'Confirm method statement, risk assessment, supervisor approval, and equipment certification before elevated installation or maintenance work.',
+        category: 'Installation',
+        status: asset.installStatus === 'Installed' ? 'Met' : obligationDueStatus(safetyDue, false, asset.installStatus === 'In Progress' || asset.installStatus === 'Scheduled', 3),
+        dueDate: safetyDue,
+        owner: installOwner,
+        authority: 'HSE / site safety reviewer',
+        market: asset.market,
+        asset,
+        campaign: campaignLabel,
+        client: asset.client,
+        action: asset.installStatus === 'Installed' ? 'Retain the safety pack with the completed installation record.' : 'Approve the method statement and equipment access plan before assigning the work order.',
+        evidenceRequired: ['Method statement', 'Risk assessment', 'Supervisor name', 'Equipment certification', 'PPE / safety checklist', 'Site induction record if required'],
+        linkedControls: [
+          { code: 'HSE-PACK', title: 'Safety method statement and risk assessment', status: asset.installStatus === 'Installed' ? 'Closed' : 'Required' },
+          { code: 'FORMAT', title: `${asset.format} - ${asset.dimensions}`, status: asset.installStatus },
+        ],
+        timeline: [{ date: formatDate(safetyDue), note: 'Safety method approval required before elevated work.' }, ...baseTimeline],
+      });
+    }
+
+    if (assetNeedsPowerAuthorization(asset)) {
+      const powerReady = asset.powerStatus === 'Online';
+      rows.push({
+        id: `OBL-POWER-${asset.id}`,
+        code: `OBL-PWR-${asset.id.split('-').slice(-1)[0]}`,
+        title: 'Electrical / power energisation approval',
+        description: 'Confirm power availability, electrical isolation/energisation approval, and responsible technician before illuminated or digital assets are treated as ready.',
+        category: asset.illumination === 'Digital' ? 'DOOH Playback' : 'Authorisations',
+        status: powerReady ? 'Met' : obligationDueStatus(safetyDue, false, asset.powerStatus === 'Online', 3),
+        dueDate: safetyDue,
+        owner: asset.illumination === 'Digital' ? 'Digital operations' : installOwner,
+        authority: 'Electrical / facilities authority',
+        market: asset.market,
+        asset,
+        campaign: campaignLabel,
+        client: asset.client,
+        action: powerReady ? 'Keep power approval and online state visible in the asset record.' : 'Confirm power approval and technician sign-off before proof or playback readiness is accepted.',
+        evidenceRequired: ['Power approval or facilities NOC', 'Technician sign-off', 'Isolation / energisation window', 'Panel or player power state', 'Photo of power/player status where applicable'],
+        linkedControls: [
+          { code: 'POWER', title: `Power state ${asset.powerStatus}`, status: asset.powerStatus },
+          { code: 'ILLUMINATION', title: asset.illumination, status: asset.playerStatus },
+        ],
+        timeline: [{ date: formatDate(safetyDue), note: 'Electrical approval required before lighting/player readiness can be closed.' }, ...baseTimeline],
+      });
+    }
+
     const isDigital = asset.format.toLowerCase().includes('digital') || asset.illumination === 'Digital' || asset.playerStatus !== 'Not Installed';
     if (isDigital) {
       const playerReady = asset.powerStatus === 'Online' && asset.playerStatus === 'Online' && (asset.playerUptime ?? 0) >= 98;
@@ -3831,9 +3986,11 @@ function OOHObligations({
   onOpenWorkOrders: () => void;
 }) {
   const obligations = useMemo(() => buildOOHObligations(data), [data]);
+  const metricsUpdatedAt = useMemo(() => new Date().toISOString(), [obligations]);
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All Status' | OOHObligationStatus>('All Status');
   const [categoryFilter, setCategoryFilter] = useState<'All Categories' | OOHObligationCategory>('All Categories');
+  const [summaryFilter, setSummaryFilter] = useState<'None' | 'Open Proof'>('None');
   const [marketFilter, setMarketFilter] = useState('All markets');
   const [selectedId, setSelectedId] = useState('');
   const markets = useMemo(() => ['All markets', ...Array.from(new Set(data.assets.map(asset => asset.market))).filter(Boolean)], [data.assets]);
@@ -3842,7 +3999,8 @@ function OOHObligations({
     return haystack.includes(query.toLowerCase())
       && (statusFilter === 'All Status' || item.status === statusFilter)
       && (categoryFilter === 'All Categories' || item.category === categoryFilter)
-      && (marketFilter === 'All markets' || item.market === marketFilter);
+      && (marketFilter === 'All markets' || item.market === marketFilter)
+      && (summaryFilter !== 'Open Proof' || (item.category === 'Proof' && item.status !== 'Met'));
   });
   const selected = obligations.find(item => item.id === selectedId)
     ?? obligations.find(item => item.asset.id === selectedAssetId)
@@ -3876,7 +4034,7 @@ function OOHObligations({
           <div>
             <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#7EB8F7]">OOH obligation control</p>
             <h2 className="mt-1 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Obligations Register</h2>
-            <p className="mt-2 max-w-4xl text-sm leading-6 text-[#B8C7DB]">Track campaign, permit, installation, proof, inspection, client-reporting and DOOH playback obligations against every OOH asset.</p>
+            <p className="mt-2 max-w-4xl text-sm leading-6 text-[#B8C7DB]">Track permits, site access authorisations, traffic approvals, safety packs, installation, proof, inspections, client reporting and DOOH playback duties against every OOH asset.</p>
           </div>
           <button type="button" className="inline-flex items-center gap-2 rounded-lg bg-[#2E7FFF] px-4 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={() => openPrimaryAction(selected)}>
             Open Required Action <ExternalLink size={15} />
@@ -3885,34 +4043,37 @@ function OOHObligations({
 
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           {[
-            ['Overdue', String(counts.overdue), 'Missed obligations requiring immediate owner action', 'Overdue'],
-            ['Due Soon', String(counts.dueSoon), 'Items inside the operating action window', 'Due Soon'],
-            ['Proof Obligations', String(counts.proof), 'Proof duties that are not yet closed', 'Proof'],
-            ['Met', String(counts.met), 'Closed obligations with supporting state', 'Met'],
+            ['Overdue Actions', String(counts.overdue), 'Due date has passed and the owner must act now.', 'Overdue'],
+            ['Due Soon', String(counts.dueSoon), 'Items inside the operating action window.', 'Due Soon'],
+            ['Evidence Still Needed', String(counts.proof), 'Proof, photo, GPS or client evidence tasks not closed.', 'Open Proof'],
+            ['Completed', String(counts.met), 'Obligations closed with required evidence or system state.', 'Met'],
           ].map(([label, value, helper, target]) => (
             <button
               key={label}
               type="button"
               className="rounded-lg border border-white/10 bg-[#07111F] p-4 text-left transition hover:border-[#7EB8F7]/45 hover:bg-white/[0.035]"
               onClick={() => {
-                if (target === 'Proof') {
+                if (target === 'Open Proof') {
                   setCategoryFilter('Proof');
                   setStatusFilter('All Status');
+                  setSummaryFilter('Open Proof');
                 } else {
                   setStatusFilter(target as OOHObligationStatus);
                   setCategoryFilter('All Categories');
+                  setSummaryFilter('None');
                 }
               }}
             >
               <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
               <p className="mt-2 text-3xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{value}</p>
               <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{helper}</p>
+              <MetricTimestamp updatedAt={metricsUpdatedAt} />
             </button>
           ))}
         </div>
       </div>
 
-      <div className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1.35fr)_430px]">
+      <div className="grid min-w-0 items-start gap-5 2xl:grid-cols-[minmax(0,1fr)_340px]">
         <div className="min-w-0 rounded-lg border border-white/10 bg-[#0B172A] p-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
@@ -3924,10 +4085,16 @@ function OOHObligations({
                 <Search size={15} />
                 <input className="w-52 bg-transparent text-white outline-none placeholder:text-[#58708E]" placeholder="Search obligations" value={query} onChange={event => setQuery(event.target.value)} />
               </label>
-              <select className="h-10 rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm font-bold text-white outline-none" value={statusFilter} onChange={event => setStatusFilter(event.target.value as 'All Status' | OOHObligationStatus)}>
+              <select className="h-10 rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm font-bold text-white outline-none" value={statusFilter} onChange={event => {
+                setStatusFilter(event.target.value as 'All Status' | OOHObligationStatus);
+                setSummaryFilter('None');
+              }}>
                 {obligationStatuses.map(item => <option key={item} value={item}>{item}</option>)}
               </select>
-              <select className="h-10 rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm font-bold text-white outline-none" value={categoryFilter} onChange={event => setCategoryFilter(event.target.value as 'All Categories' | OOHObligationCategory)}>
+              <select className="h-10 rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm font-bold text-white outline-none" value={categoryFilter} onChange={event => {
+                setCategoryFilter(event.target.value as 'All Categories' | OOHObligationCategory);
+                setSummaryFilter('None');
+              }}>
                 {obligationCategories.map(item => <option key={item} value={item}>{item}</option>)}
               </select>
               <select className="h-10 rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm font-bold text-white outline-none" value={marketFilter} onChange={event => setMarketFilter(event.target.value)}>
@@ -3937,7 +4104,7 @@ function OOHObligations({
           </div>
 
           <div className="custom-scrollbar mt-4 w-full max-w-full overflow-x-auto rounded-lg border border-white/10">
-            <table className="w-full min-w-[1120px] border-collapse text-left text-sm">
+            <table className="w-full min-w-[1080px] border-collapse text-left text-sm">
               <thead className="bg-[#07111F] text-[10px] uppercase tracking-wide text-[#7A94B4]">
                 <tr>
                   <th className="px-4 py-3">Code</th>
@@ -3945,7 +4112,7 @@ function OOHObligations({
                   <th className="px-4 py-3">Asset / Campaign</th>
                   <th className="px-4 py-3">Category</th>
                   <th className="px-4 py-3">Due</th>
-                  <th className="px-4 py-3">Owner</th>
+                  <th className="min-w-[220px] px-4 py-3">Owner</th>
                   <th className="px-4 py-3">Status</th>
                 </tr>
               </thead>
@@ -3983,7 +4150,9 @@ function OOHObligations({
                           {daysUntil(item.dueDate) < 0 ? `${Math.abs(daysUntil(item.dueDate))} days overdue` : `${daysUntil(item.dueDate)} days left`}
                         </span>
                       </td>
-                      <td className="px-4 py-4 align-top text-[#B8C7DB]">{item.owner}</td>
+                      <td className="min-w-[220px] px-4 py-4 align-top text-[#B8C7DB]">
+                        <span className="block whitespace-normal break-words leading-5">{item.owner}</span>
+                      </td>
                       <td className="px-4 py-4 align-top"><Pill tone={obligationStatusTone(item.status)}>{item.status}</Pill></td>
                     </tr>
                   );
@@ -3996,7 +4165,7 @@ function OOHObligations({
           </div>
         </div>
 
-        <aside className="sticky top-5 space-y-4">
+        <aside className="space-y-4 2xl:sticky 2xl:top-5">
           <div className="overflow-hidden rounded-lg border border-[#2E7FFF]/30 bg-[#0B172A] shadow-xl shadow-black/20">
             <AssetPopupVisual asset={selected.asset} className="h-40 w-full" />
             <div className="p-4">
@@ -4228,6 +4397,7 @@ function OOHSettings({
   const [section, setSection] = useState<OOHSettingsSection>('network');
   const [settings, setSettings] = useState<OOHSettingsState>(oohSettingsDefaults);
   const [notice, setNotice] = useState('Settings are ready for OOH assets, field evidence, client pages and partner governance.');
+  const metricsUpdatedAt = useMemo(() => new Date().toISOString(), [data]);
   const markets = useMemo(() => Array.from(new Set(data.assets.map(asset => asset.market))).filter(Boolean), [data.assets]);
   const formats = useMemo(() => Array.from(new Set(data.assets.map(asset => asset.format))).filter(Boolean), [data.assets]);
   const readyAssets = data.assets.filter(asset => asset.evidenceStatus === 'Ready').length;
@@ -4291,6 +4461,7 @@ function OOHSettings({
               <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
               <p className="mt-2 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{value}</p>
               <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{helper}</p>
+              <MetricTimestamp updatedAt={metricsUpdatedAt} />
             </div>
           ))}
         </div>
@@ -4445,6 +4616,7 @@ function OOHSettings({
                 <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Current share coverage</p>
                 <p className="mt-2 text-3xl font-black text-white">{liveClientPages.length}</p>
                 <p className="mt-1 text-sm text-[#9DB4D0]">Live secure client evidence pages.</p>
+                <MetricTimestamp updatedAt={metricsUpdatedAt} />
                 <div className="mt-4 grid gap-2">
                   {data.clientPages.slice(0, 3).map(page => (
                     <div key={page.token} className="rounded-lg border border-white/10 bg-[#0B172A] p-3">
@@ -4963,6 +5135,7 @@ export function OOHOperatorApp() {
   }), [data.assets, marketFilter, searchTerm]);
   const clientBookingRows = useMemo(() => buildClientBookingRows(data.assets, data.clientPages), [data.assets, data.clientPages]);
   const activeReportPreview = useMemo(() => activeReportId ? buildOOHReportPreview(data, activeReportId) : null, [activeReportId, data]);
+  const metricsUpdatedAt = useMemo(() => new Date().toISOString(), [data]);
 
   const pendingSubmissions = data.submissions.filter(submission => submission.status === 'Pending Review');
   const actionBlockers = data.assets.filter(assetNeedsAction).length;
@@ -5643,17 +5816,18 @@ export function OOHOperatorApp() {
               onOpenAssets={() => setActiveTab('Assets')}
               onOpenSurveys={() => setActiveTab('Surveys')}
               onOpenEvidence={() => setActiveTab('Evidence')}
+              onOpenObligations={() => setActiveTab('Obligations')}
             />
 
             <div className="grid gap-3 lg:grid-cols-3">
               {metricInsights.slice(0, 3).map(metric => (
-                <MetricCard key={metric.id} metric={metric} selected={selectedMetric.id === metric.id} onOpen={handleMetricExplain} />
+                <MetricCard key={metric.id} metric={metric} selected={selectedMetric.id === metric.id} updatedAt={metricsUpdatedAt} onOpen={handleMetricExplain} />
               ))}
             </div>
 
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               {metricInsights.slice(3).map(metric => (
-                <MetricCard key={metric.id} metric={metric} selected={selectedMetric.id === metric.id} onOpen={handleMetricExplain} />
+                <MetricCard key={metric.id} metric={metric} selected={selectedMetric.id === metric.id} updatedAt={metricsUpdatedAt} onOpen={handleMetricExplain} />
               ))}
             </div>
 
@@ -6702,6 +6876,7 @@ export function OOHOperatorApp() {
       )}
       <MetricInsightModal
         metric={modalMetric}
+        updatedAt={metricsUpdatedAt}
         onRunAction={runMetricAction}
         onRunRecord={runMetricRecordAction}
         onClose={() => setMetricModalId(null)}
