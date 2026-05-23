@@ -1982,6 +1982,7 @@ function LiveOperationsGisPanel({
   onOpenAssets,
   onOpenSurveys,
   onOpenEvidence,
+  onOpenObligations,
 }: {
   assets: OOHAsset[];
   assignments: OOHBootstrap['assignments'];
@@ -1992,6 +1993,7 @@ function LiveOperationsGisPanel({
   onOpenAssets: () => void;
   onOpenSurveys: () => void;
   onOpenEvidence: () => void;
+  onOpenObligations: () => void;
 }) {
   const center = useMemo<[number, number]>(() => {
     const selected = assets.find(asset => asset.id === selectedAssetId) ?? assets[0];
@@ -2070,8 +2072,8 @@ function LiveOperationsGisPanel({
     { label: 'Permit Watch', value: String(permitAttentionAssets.length), detail: 'Needs compliance action', action: () => {
       const target = permitAttentionAssets[0];
       if (target) onSelectAsset(target.id);
-      onOpenAssets();
-    }, actionLabel: 'Review permits', icon: ShieldCheck, tone: 'amber' },
+      onOpenObligations();
+    }, actionLabel: 'Open obligations', icon: ShieldCheck, tone: 'amber' },
   ];
 
   return (
@@ -5643,6 +5645,7 @@ export function OOHOperatorApp() {
               onOpenAssets={() => setActiveTab('Assets')}
               onOpenSurveys={() => setActiveTab('Surveys')}
               onOpenEvidence={() => setActiveTab('Evidence')}
+              onOpenObligations={() => setActiveTab('Obligations')}
             />
 
             <div className="grid gap-3 lg:grid-cols-3">
