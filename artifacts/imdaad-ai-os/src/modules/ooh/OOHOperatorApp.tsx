@@ -171,6 +171,7 @@ const oohTabPaths: Record<OOHTab, string> = {
 const assetFormatOptions = ['Unipole billboard', 'Digital screen', 'Bridge banner', 'Bus shelter', 'Wall wrap', 'Street furniture'];
 const assetFrequencyOptions = ['Daily', 'Weekly', 'Monthly', 'Quarterly', 'Yearly', 'Other'];
 const assetNetworkOptions = ['Dubai', 'Sharjah', 'Abu Dhabi', 'Ajman', 'Ras Al Khaimah', 'Fujairah', 'Umm Al Quwain'];
+const campaignAddAssetValue = '__add_ooh_asset_from_campaign__';
 const marketOptions = ['All markets', 'Dubai', 'Abu Dhabi', 'Sharjah'];
 const recurrenceOptions: AssignmentForm['recurrence'][] = ['One-time', 'Weekly', 'Monthly', 'Quarterly'];
 const defaultInstallationTeams = ['Falcon Field Team', 'Capital Survey Crew', 'Coastal QA Team', 'In-house Install Team', 'Certified Print Vendor'];
@@ -5570,6 +5571,11 @@ export function OOHOperatorApp() {
     setCampaignStep(1);
   };
   const updateCampaignAsset = (assetId: string) => {
+    if (assetId === campaignAddAssetValue) {
+      closeCampaignWizard();
+      openAssetIntakeWizard();
+      return;
+    }
     const asset = data.assets.find(item => item.id === assetId);
     if (!asset) return;
     setSelectedAssetId(asset.id);
@@ -6597,6 +6603,7 @@ export function OOHOperatorApp() {
                         value={campaignForm.assetId}
                         onChange={event => updateCampaignAsset(event.target.value)}
                       >
+                        <option value={campaignAddAssetValue}>+ Add new asset</option>
                         {data.assets.map(asset => <option key={asset.id} value={asset.id}>{asset.name} - {asset.market}</option>)}
                       </select>
                     </label>
