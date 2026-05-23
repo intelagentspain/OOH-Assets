@@ -4104,7 +4104,7 @@ function OOHObligations({
           </div>
 
           <div className="custom-scrollbar mt-4 w-full max-w-full overflow-x-auto rounded-lg border border-white/10">
-            <table className="w-full min-w-[1080px] border-collapse text-left text-sm">
+            <table className="w-full min-w-[1160px] border-collapse text-left text-sm">
               <thead className="bg-[#07111F] text-[10px] uppercase tracking-wide text-[#7A94B4]">
                 <tr>
                   <th className="px-4 py-3">Code</th>
@@ -4113,7 +4113,7 @@ function OOHObligations({
                   <th className="px-4 py-3">Category</th>
                   <th className="px-4 py-3">Due</th>
                   <th className="min-w-[220px] px-4 py-3">Owner</th>
-                  <th className="px-4 py-3">Status</th>
+                  <th className="min-w-[150px] px-4 py-3 pr-6">Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -4153,7 +4153,9 @@ function OOHObligations({
                       <td className="min-w-[220px] px-4 py-4 align-top text-[#B8C7DB]">
                         <span className="block whitespace-normal break-words leading-5">{item.owner}</span>
                       </td>
-                      <td className="px-4 py-4 align-top"><Pill tone={obligationStatusTone(item.status)}>{item.status}</Pill></td>
+                      <td className="min-w-[150px] px-4 py-4 pr-6 align-top">
+                        <Pill tone={obligationStatusTone(item.status)} className="min-w-[96px]">{item.status}</Pill>
+                      </td>
                     </tr>
                   );
                 })}
