@@ -44,6 +44,14 @@ function pillClass(value: string): string {
   return 'border-amber-300/25 bg-amber-300/10 text-amber-100';
 }
 
+function ClientMetricTimestamp({ updatedAt }: { updatedAt: string }) {
+  return (
+    <p className="mt-3 text-[10px] font-black uppercase tracking-wide text-[#58708E]">
+      Updated {fmtDateTime(updatedAt)}
+    </p>
+  );
+}
+
 function ClientMap({ assets }: { assets: OOHAsset[] }) {
   const center = useMemo<[number, number]>(() => {
     const first = assets[0];
@@ -70,13 +78,14 @@ function ClientMap({ assets }: { assets: OOHAsset[] }) {
   );
 }
 
-function Metric({ label, value, helper, icon: Icon }: { label: string; value: string | number; helper?: string; icon: typeof CheckCircle2 }) {
+function Metric({ label, value, helper, icon: Icon, updatedAt }: { label: string; value: string | number; helper?: string; icon: typeof CheckCircle2; updatedAt: string }) {
   return (
     <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
       <Icon size={20} className="text-[#7EB8F7]" />
       <p className="mt-3 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{value}</p>
       <p className="mt-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">{label}</p>
       {helper && <p className="mt-2 text-xs leading-5 text-[#9DB4D0]">{helper}</p>}
+      <ClientMetricTimestamp updatedAt={updatedAt} />
     </div>
   );
 }
@@ -273,6 +282,7 @@ function historicalTrafficSeries(rows: ReturnType<typeof carCountForAsset>[], pe
 function CarCountAnalytics({ assets }: { assets: OOHAsset[] }) {
   const [trafficPeriod, setTrafficPeriod] = useState<TrafficPeriod>('day');
   const rows = assets.map(carCountForAsset);
+  const metricsUpdatedAt = rows[0]?.referenceAt ?? new Date().toISOString();
   const totalObserved = rows.reduce((sum, row) => sum + row.observedCars, 0);
   const avgHourly = rows.length ? Math.round(rows.reduce((sum, row) => sum + row.hourlyAverage, 0) / rows.length) : 0;
   const avgConfidence = rows.length ? Math.round(rows.reduce((sum, row) => sum + row.confidence, 0) / rows.length) : 0;
@@ -304,21 +314,25 @@ function CarCountAnalytics({ assets }: { assets: OOHAsset[] }) {
           <CarFront size={17} className="text-[#7EB8F7]" />
           <p className="mt-3 text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Observed cars</p>
           <p className="mt-1 text-lg font-black text-white">{fmtNumber(totalObserved)}</p>
+          <ClientMetricTimestamp updatedAt={metricsUpdatedAt} />
         </div>
         <div className="rounded-lg border border-white/10 bg-[#07111F] p-3">
           <BarChart3 size={17} className="text-[#7EB8F7]" />
           <p className="mt-3 text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Avg hourly flow</p>
           <p className="mt-1 text-lg font-black text-white">{fmtNumber(avgHourly)}/h</p>
+          <ClientMetricTimestamp updatedAt={metricsUpdatedAt} />
         </div>
         <div className="rounded-lg border border-white/10 bg-[#07111F] p-3">
           <Route size={17} className="text-[#7EB8F7]" />
           <p className="mt-3 text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Highest flow</p>
           <p className="mt-1 text-lg font-black text-white">{topLocation?.asset.route ?? 'Route profile'}</p>
+          <ClientMetricTimestamp updatedAt={metricsUpdatedAt} />
         </div>
         <div className="rounded-lg border border-white/10 bg-[#07111F] p-3">
           <Timer size={17} className="text-[#7EB8F7]" />
           <p className="mt-3 text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Peak window</p>
           <p className="mt-1 text-lg font-black text-white">{topLocation?.peakWindow ?? 'Inspection window'}</p>
+          <ClientMetricTimestamp updatedAt={metricsUpdatedAt} />
         </div>
       </div>
 
@@ -439,6 +453,7 @@ export function OOHClientPage({ token }: { token: string }) {
   const { page, assets, submissions } = payload;
   const pendingItems = assets.filter(asset => asset.evidenceStatus !== 'Ready').length;
   const galleryItems = assets.flatMap(asset => galleryItemsForAsset(asset, submissions));
+  const metricsUpdatedAt = page.lastViewedAt ?? page.createdAt;
 
   return (
     <div className="min-h-screen bg-[#07111F] text-[#EEF3FA]">
@@ -462,28 +477,32 @@ export function OOHClientPage({ token }: { token: string }) {
 
       <main className="mx-auto max-w-6xl px-4 py-5">
         <section className="grid gap-3 md:grid-cols-4">
-          <Metric label="Booked Assets" value={assets.length} helper="Assets covered by this client evidence link." icon={MapPin} />
-          <Metric label="Approved Proof" value={`${page.proofReady}/${assets.length}`} helper="Booked assets with client-visible proof attached." icon={CheckCircle2} />
-          <Metric label="Latest Inspection" value={`${page.surveyScore}%`} helper="Most recent approved quality inspection score." icon={FileCheck2} />
-          <Metric label="Attention Items" value={pendingItems} helper="Assets still missing approved client evidence." icon={pendingItems ? TriangleAlert : ShieldCheck} />
+          <Metric label="Booked Assets" value={assets.length} helper="Assets covered by this client evidence link." icon={MapPin} updatedAt={metricsUpdatedAt} />
+          <Metric label="Approved Proof" value={`${page.proofReady}/${assets.length}`} helper="Booked assets with client-visible proof attached." icon={CheckCircle2} updatedAt={metricsUpdatedAt} />
+          <Metric label="Latest Inspection" value={`${page.surveyScore}%`} helper="Most recent approved quality inspection score." icon={FileCheck2} updatedAt={metricsUpdatedAt} />
+          <Metric label="Attention Items" value={pendingItems} helper="Assets still missing approved client evidence." icon={pendingItems ? TriangleAlert : ShieldCheck} updatedAt={metricsUpdatedAt} />
         </section>
 
         <section className="mt-5 grid gap-3 md:grid-cols-4">
           <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
             <p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Access state</p>
             <p className="mt-2 text-lg font-black text-white">{page.accessState ?? 'Active'}</p>
+            <ClientMetricTimestamp updatedAt={metricsUpdatedAt} />
           </div>
           <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
             <p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Viewer count</p>
             <p className="mt-2 text-lg font-black text-white">{page.viewerCount ?? 0}</p>
+            <ClientMetricTimestamp updatedAt={metricsUpdatedAt} />
           </div>
           <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
             <p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Last viewed</p>
             <p className="mt-2 text-lg font-black text-white">{page.lastViewedAt ? fmt(page.lastViewedAt) : 'First client view'}</p>
+            <ClientMetricTimestamp updatedAt={metricsUpdatedAt} />
           </div>
           <div className="rounded-lg border border-emerald-400/20 bg-emerald-400/10 p-4">
             <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-100">Published evidence</p>
             <p className="mt-2 text-lg font-black text-white">Approved only</p>
+            <ClientMetricTimestamp updatedAt={metricsUpdatedAt} />
           </div>
         </section>
 

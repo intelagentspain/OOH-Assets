@@ -949,7 +949,7 @@ function assetMetricRecord(
   };
 }
 
-function MetricCard({ metric, selected, onOpen }: { metric: MetricInsight; selected: boolean; onOpen: (metricId: string) => void }) {
+function MetricCard({ metric, selected, updatedAt, onOpen }: { metric: MetricInsight; selected: boolean; updatedAt: string; onOpen: (metricId: string) => void }) {
   const Icon = metric.icon;
   const toneClass = {
     blue: 'bg-blue-400/10 text-blue-200 border-blue-400/20',
@@ -975,6 +975,7 @@ function MetricCard({ metric, selected, onOpen }: { metric: MetricInsight; selec
       </div>
       <div className="mt-4 text-3xl font-black text-[#EEF3FA]" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{metric.value}</div>
       <p className="mt-1 min-h-[44px] text-sm leading-6 text-[#9DB4D0]">{metric.note}</p>
+      <MetricTimestamp updatedAt={updatedAt} className="mt-2" />
       <span className={`mt-auto inline-flex h-9 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-black transition ${
         selected
           ? 'border-[#7EB8F7] bg-[#2E7FFF] text-white'
@@ -994,11 +995,13 @@ function urgencyTone(urgency: MetricRecord['urgency']): string {
 
 function MetricInsightModal({
   metric,
+  updatedAt,
   onRunAction,
   onRunRecord,
   onClose,
 }: {
   metric: MetricInsight | null;
+  updatedAt: string;
   onRunAction: (metric: MetricInsight) => void;
   onRunRecord: (record: MetricRecord) => void;
   onClose: () => void;
@@ -1111,6 +1114,7 @@ function MetricInsightModal({
               <p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Current Value</p>
               <p className="mt-3 text-4xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{metric.value}</p>
               <p className="mt-2 text-sm leading-6 text-[#B8C7DB]">{metric.note}</p>
+              <MetricTimestamp updatedAt={updatedAt} />
             </div>
             <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
               <p className="text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">Why it matters</p>
@@ -1185,6 +1189,14 @@ function Pill({ children, tone, className = '' }: { children: string; tone?: str
   );
 }
 
+function MetricTimestamp({ updatedAt, className = '' }: { updatedAt: string; className?: string }) {
+  return (
+    <p className={`mt-3 text-[10px] font-black uppercase tracking-wide text-[#58708E] ${className}`}>
+      Updated {formatDateTime(updatedAt)}
+    </p>
+  );
+}
+
 function OOHReportPreviewModal({ report, onClose }: { report: OOHGeneratedReport | null; onClose: () => void }) {
   if (!report) return null;
 
@@ -1230,6 +1242,7 @@ function OOHReportPreviewModal({ report, onClose }: { report: OOHGeneratedReport
                 <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{item.label}</p>
                 <p className="mt-2 text-3xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{item.value}</p>
                 <p className="mt-2 text-xs leading-5 text-[#9DB4D0]">{item.helper}</p>
+                <MetricTimestamp updatedAt={report.generatedAt} />
               </div>
             ))}
           </div>
@@ -2004,6 +2017,7 @@ function LiveOperationsGisPanel({
   const [layerPanelOpen, setLayerPanelOpen] = useState(false);
   const [mapLayers, setMapLayers] = useState({ assets: true, crews: true, routes: true, hotspots: true });
   const [missionTick, setMissionTick] = useState(0);
+  const metricsUpdatedAt = useMemo(() => new Date().toISOString(), [assets, assignments, submissions]);
   const now = Date.now();
   const activeAssignments = assignments.filter(assignment => ['Active', 'In Progress', 'Submitted', 'Overdue'].includes(assignment.status));
   const proofGapAssets = assets.filter(asset => asset.evidenceStatus !== 'Ready');
@@ -2119,6 +2133,7 @@ function LiveOperationsGisPanel({
                 <span className="text-[11px] font-black text-[#7EB8F7]">{card.actionLabel}</span>
               </div>
               <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{card.detail}</p>
+              <MetricTimestamp updatedAt={metricsUpdatedAt} />
             </button>
           );
         })}
@@ -2797,6 +2812,7 @@ function OOHVendorIntelligence({
   onSelectAsset: (assetId: string) => void;
 }) {
   const partners = useMemo(() => buildOOHVendorPartners(data.assets, data.assignments, data.submissions), [data.assets, data.assignments, data.submissions]);
+  const metricsUpdatedAt = useMemo(() => new Date().toISOString(), [partners]);
   const [filter, setFilter] = useState<OOHVendorFilter>('copilot');
   const [selectedPartnerId, setSelectedPartnerId] = useState(partners[0]?.id ?? '');
   const [activeAction, setActiveAction] = useState<OOHVendorAction>('action');
@@ -2888,6 +2904,7 @@ function OOHVendorIntelligence({
               <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
               <p className="mt-2 text-3xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{value}</p>
               <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{helper}</p>
+              <MetricTimestamp updatedAt={metricsUpdatedAt} />
               <div className={`mt-3 h-1 rounded-full border ${tone}`} />
             </div>
           ))}
@@ -3302,6 +3319,7 @@ function OOHWorkOrders({
   onOpenClientPages: () => void;
 }) {
   const workOrders = useMemo(() => buildOOHWorkOrders(data), [data]);
+  const metricsUpdatedAt = useMemo(() => new Date().toISOString(), [workOrders]);
   const [selectedOrderId, setSelectedOrderId] = useState('');
   const [filter, setFilter] = useState<OOHWorkOrderFilter>('all');
   const [search, setSearch] = useState('');
@@ -3390,6 +3408,7 @@ function OOHWorkOrders({
               <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
               <p className="mt-2 text-3xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{value}</p>
               <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{helper}</p>
+              <MetricTimestamp updatedAt={metricsUpdatedAt} />
             </button>
           ))}
         </div>
@@ -3967,6 +3986,7 @@ function OOHObligations({
   onOpenWorkOrders: () => void;
 }) {
   const obligations = useMemo(() => buildOOHObligations(data), [data]);
+  const metricsUpdatedAt = useMemo(() => new Date().toISOString(), [obligations]);
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All Status' | OOHObligationStatus>('All Status');
   const [categoryFilter, setCategoryFilter] = useState<'All Categories' | OOHObligationCategory>('All Categories');
@@ -4047,6 +4067,7 @@ function OOHObligations({
               <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
               <p className="mt-2 text-3xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{value}</p>
               <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{helper}</p>
+              <MetricTimestamp updatedAt={metricsUpdatedAt} />
             </button>
           ))}
         </div>
@@ -4374,6 +4395,7 @@ function OOHSettings({
   const [section, setSection] = useState<OOHSettingsSection>('network');
   const [settings, setSettings] = useState<OOHSettingsState>(oohSettingsDefaults);
   const [notice, setNotice] = useState('Settings are ready for OOH assets, field evidence, client pages and partner governance.');
+  const metricsUpdatedAt = useMemo(() => new Date().toISOString(), [data]);
   const markets = useMemo(() => Array.from(new Set(data.assets.map(asset => asset.market))).filter(Boolean), [data.assets]);
   const formats = useMemo(() => Array.from(new Set(data.assets.map(asset => asset.format))).filter(Boolean), [data.assets]);
   const readyAssets = data.assets.filter(asset => asset.evidenceStatus === 'Ready').length;
@@ -4437,6 +4459,7 @@ function OOHSettings({
               <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
               <p className="mt-2 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{value}</p>
               <p className="mt-1 text-xs leading-5 text-[#9DB4D0]">{helper}</p>
+              <MetricTimestamp updatedAt={metricsUpdatedAt} />
             </div>
           ))}
         </div>
@@ -4591,6 +4614,7 @@ function OOHSettings({
                 <p className="text-[11px] font-black uppercase tracking-wide text-[#7A94B4]">Current share coverage</p>
                 <p className="mt-2 text-3xl font-black text-white">{liveClientPages.length}</p>
                 <p className="mt-1 text-sm text-[#9DB4D0]">Live secure client evidence pages.</p>
+                <MetricTimestamp updatedAt={metricsUpdatedAt} />
                 <div className="mt-4 grid gap-2">
                   {data.clientPages.slice(0, 3).map(page => (
                     <div key={page.token} className="rounded-lg border border-white/10 bg-[#0B172A] p-3">
@@ -5109,6 +5133,7 @@ export function OOHOperatorApp() {
   }), [data.assets, marketFilter, searchTerm]);
   const clientBookingRows = useMemo(() => buildClientBookingRows(data.assets, data.clientPages), [data.assets, data.clientPages]);
   const activeReportPreview = useMemo(() => activeReportId ? buildOOHReportPreview(data, activeReportId) : null, [activeReportId, data]);
+  const metricsUpdatedAt = useMemo(() => new Date().toISOString(), [data]);
 
   const pendingSubmissions = data.submissions.filter(submission => submission.status === 'Pending Review');
   const actionBlockers = data.assets.filter(assetNeedsAction).length;
@@ -5794,13 +5819,13 @@ export function OOHOperatorApp() {
 
             <div className="grid gap-3 lg:grid-cols-3">
               {metricInsights.slice(0, 3).map(metric => (
-                <MetricCard key={metric.id} metric={metric} selected={selectedMetric.id === metric.id} onOpen={handleMetricExplain} />
+                <MetricCard key={metric.id} metric={metric} selected={selectedMetric.id === metric.id} updatedAt={metricsUpdatedAt} onOpen={handleMetricExplain} />
               ))}
             </div>
 
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               {metricInsights.slice(3).map(metric => (
-                <MetricCard key={metric.id} metric={metric} selected={selectedMetric.id === metric.id} onOpen={handleMetricExplain} />
+                <MetricCard key={metric.id} metric={metric} selected={selectedMetric.id === metric.id} updatedAt={metricsUpdatedAt} onOpen={handleMetricExplain} />
               ))}
             </div>
 
@@ -6849,6 +6874,7 @@ export function OOHOperatorApp() {
       )}
       <MetricInsightModal
         metric={modalMetric}
+        updatedAt={metricsUpdatedAt}
         onRunAction={runMetricAction}
         onRunRecord={runMetricRecordAction}
         onClose={() => setMetricModalId(null)}
