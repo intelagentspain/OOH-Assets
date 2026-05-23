@@ -4073,7 +4073,7 @@ function OOHObligations({
         </div>
       </div>
 
-      <div className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1.35fr)_430px]">
+      <div className="grid min-w-0 items-start gap-5 2xl:grid-cols-[minmax(0,1fr)_340px]">
         <div className="min-w-0 rounded-lg border border-white/10 bg-[#0B172A] p-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
@@ -4104,7 +4104,7 @@ function OOHObligations({
           </div>
 
           <div className="custom-scrollbar mt-4 w-full max-w-full overflow-x-auto rounded-lg border border-white/10">
-            <table className="w-full min-w-[1120px] border-collapse text-left text-sm">
+            <table className="w-full min-w-[1080px] border-collapse text-left text-sm">
               <thead className="bg-[#07111F] text-[10px] uppercase tracking-wide text-[#7A94B4]">
                 <tr>
                   <th className="px-4 py-3">Code</th>
@@ -4112,7 +4112,7 @@ function OOHObligations({
                   <th className="px-4 py-3">Asset / Campaign</th>
                   <th className="px-4 py-3">Category</th>
                   <th className="px-4 py-3">Due</th>
-                  <th className="px-4 py-3">Owner</th>
+                  <th className="min-w-[220px] px-4 py-3">Owner</th>
                   <th className="px-4 py-3">Status</th>
                 </tr>
               </thead>
@@ -4150,7 +4150,9 @@ function OOHObligations({
                           {daysUntil(item.dueDate) < 0 ? `${Math.abs(daysUntil(item.dueDate))} days overdue` : `${daysUntil(item.dueDate)} days left`}
                         </span>
                       </td>
-                      <td className="px-4 py-4 align-top text-[#B8C7DB]">{item.owner}</td>
+                      <td className="min-w-[220px] px-4 py-4 align-top text-[#B8C7DB]">
+                        <span className="block whitespace-normal break-words leading-5">{item.owner}</span>
+                      </td>
                       <td className="px-4 py-4 align-top"><Pill tone={obligationStatusTone(item.status)}>{item.status}</Pill></td>
                     </tr>
                   );
@@ -4163,7 +4165,7 @@ function OOHObligations({
           </div>
         </div>
 
-        <aside className="sticky top-5 space-y-4">
+        <aside className="space-y-4 2xl:sticky 2xl:top-5">
           <div className="overflow-hidden rounded-lg border border-[#2E7FFF]/30 bg-[#0B172A] shadow-xl shadow-black/20">
             <AssetPopupVisual asset={selected.asset} className="h-40 w-full" />
             <div className="p-4">
