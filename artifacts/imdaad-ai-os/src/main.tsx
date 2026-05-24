@@ -1,3 +1,4 @@
+import { createElement, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { ScanPage } from "./pages/ScanPage";
@@ -15,6 +16,25 @@ import { MemberProfilesProvider } from "./context/MemberProfilesContext";
 import { ClientsProvider } from "./context/ClientsContext";
 import { VendorsProvider } from "./context/VendorsContext";
 import "./index.css";
+
+const ELEVENLABS_AGENT_ID = "agent_1001ksdt92e4e1msfcj96f2p7b75";
+const ELEVENLABS_WIDGET_SCRIPT_ID = "elevenlabs-convai-widget-script";
+const ELEVENLABS_WIDGET_SCRIPT_SRC = "https://unpkg.com/@elevenlabs/convai-widget-embed";
+
+function ElevenLabsAgentWidget() {
+  useEffect(() => {
+    if (document.getElementById(ELEVENLABS_WIDGET_SCRIPT_ID)) return;
+
+    const script = document.createElement("script");
+    script.id = ELEVENLABS_WIDGET_SCRIPT_ID;
+    script.src = ELEVENLABS_WIDGET_SCRIPT_SRC;
+    script.async = true;
+    script.type = "text/javascript";
+    document.body.appendChild(script);
+  }, []);
+
+  return createElement("elevenlabs-convai", { "agent-id": ELEVENLABS_AGENT_ID });
+}
 
 function ScanRoute() {
   const { addIncident } = useIncidents();
@@ -42,7 +62,7 @@ function ScanRoute() {
   );
 }
 
-function Root() {
+function RoutedApp() {
   const base = import.meta.env.BASE_URL ?? '/';
   const path = window.location.pathname.replace(base.replace(/\/$/, ''), '');
   const isScan = path.startsWith('/scan/');
@@ -171,6 +191,15 @@ function Root() {
         </MemberProfilesProvider>
       </ClientsProvider>
     </VendorsProvider>
+  );
+}
+
+function Root() {
+  return (
+    <>
+      <RoutedApp />
+      <ElevenLabsAgentWidget />
+    </>
   );
 }
 
