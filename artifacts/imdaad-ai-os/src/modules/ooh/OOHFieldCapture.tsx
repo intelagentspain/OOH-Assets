@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Camera, CheckCircle2, FileSignature, MapPin, QrCode, Send, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Camera, CheckCircle2, FileSignature, MapPin, QrCode, Send, ShieldCheck } from 'lucide-react';
 import { fetchOOHBootstrap, submitOOHSurvey } from './api';
 import { fallbackOOHBootstrap } from './seedData';
 import type { OOHBootstrap, OOHSurveyQuestion } from './types';
@@ -202,6 +202,9 @@ export function OOHFieldCapture({ assignmentId }: { assignmentId: string }) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#07111F] p-4 text-[#EEF3FA]">
         <div className="w-full max-w-sm rounded-lg border border-white/10 bg-[#0B172A] p-6 text-center">
+          <a className="mb-5 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-black text-[#D8E9FF] hover:bg-white/10" href="/ooh/surveys">
+            <ArrowLeft size={14} /> Back to Surveys
+          </a>
           <h1 className="text-xl font-black">Assignment unavailable</h1>
           <p className="mt-2 text-sm text-[#9DB4D0]">The OOH field assignment could not be found.</p>
         </div>
@@ -213,6 +216,9 @@ export function OOHFieldCapture({ assignmentId }: { assignmentId: string }) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#07111F] p-4 text-[#EEF3FA]">
         <div className="w-full max-w-sm rounded-lg border border-emerald-400/25 bg-[#0B172A] p-6 text-center shadow-2xl shadow-black/30">
+          <a className="mb-5 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-black text-[#D8E9FF] hover:bg-white/10" href="/ooh/surveys">
+            <ArrowLeft size={14} /> Back to Surveys
+          </a>
           <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-lg bg-emerald-400/10 text-emerald-200">
             <CheckCircle2 size={36} />
           </div>
@@ -234,6 +240,9 @@ export function OOHFieldCapture({ assignmentId }: { assignmentId: string }) {
     <div className="min-h-screen bg-[#07111F] px-4 py-5 text-[#EEF3FA]">
       <div className="mx-auto max-w-md overflow-hidden rounded-lg border border-white/10 bg-[#0B172A] shadow-2xl shadow-black/30">
         <header className="border-b border-white/10 bg-[linear-gradient(135deg,rgba(225,29,46,0.16),rgba(46,127,255,0.08))] p-5">
+          <a className="mb-5 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-[#07111F]/70 px-3 py-2 text-xs font-black text-[#D8E9FF] hover:bg-white/10" href="/ooh/surveys">
+            <ArrowLeft size={14} /> Back to Surveys
+          </a>
           <p className="text-[10px] font-black uppercase tracking-[0.24em] text-[#FFB4BC]">4C360 OOH Field Survey</p>
           <h1 className="mt-2 text-xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{assignment.name}</h1>
           <p className="mt-2 flex items-center gap-1.5 text-xs text-[#B8C7DB]"><MapPin size={13} /> {asset.name} - {asset.market}</p>
