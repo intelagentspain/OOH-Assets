@@ -77,6 +77,7 @@ interface OOHSurveyAssignment {
   id: string;
   name: string;
   assetIds: string[];
+  scope?: string[];
   team: string;
   vendor: string;
   recurrence: "One-time" | "Weekly" | "Monthly" | "Quarterly";
@@ -418,6 +419,7 @@ function seedStore(): OOHStore {
       id: "ASG-OOH-1001",
       name: "Premium Miles proof-of-posting audit",
       assetIds: ["OOH-DXB-SZR-001", "OOH-DXB-MALL-014"],
+      scope: ["Proof of Posting", "Quality Inspection", "Client Evidence Capture"],
       team: "Falcon Field Team",
       vendor: "In-house",
       recurrence: "Weekly",
@@ -432,6 +434,7 @@ function seedStore(): OOHStore {
       id: "ASG-OOH-1002",
       name: "Corniche permit and install readiness check",
       assetIds: ["OOH-AUH-COR-022"],
+      scope: ["Material Installation", "Permit / Access Check"],
       team: "Capital Survey Crew",
       vendor: "Abu Dhabi Partner",
       recurrence: "One-time",
@@ -446,6 +449,7 @@ function seedStore(): OOHStore {
       id: "ASG-OOH-1003",
       name: "JBR wall wrap exception re-inspection",
       assetIds: ["OOH-DXB-JBR-047"],
+      scope: ["Quality Inspection", "Maintenance Follow-up", "Client Evidence Capture"],
       team: "Coastal QA Team",
       vendor: "VinylCare",
       recurrence: "One-time",
@@ -742,6 +746,7 @@ router.post("/ooh/survey-assignments", async (req, res) => {
       id: stringFromBody(body.id, nextId("ASG-OOH")),
       name: stringFromBody(body.name, "OOH field survey"),
       assetIds,
+      scope: Array.isArray(body.scope) && body.scope.length ? body.scope : ["Quality Inspection"],
       team: stringFromBody(body.team, "Falcon Field Team"),
       vendor: stringFromBody(body.vendor, "In-house"),
       recurrence: body.recurrence ?? "One-time",

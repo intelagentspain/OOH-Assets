@@ -97,6 +97,7 @@ interface CampaignArtworkUpload {
 
 interface AssignmentForm {
   assetId: string;
+  scope: string[];
   name: string;
   team: string;
   vendor: string;
@@ -150,8 +151,8 @@ const tabs: Array<{ id: OOHTab; label: string; icon: typeof BarChart3 }> = [
   { id: 'Work Orders', label: 'Work Orders', icon: FileSearch },
   { id: 'Obligations', label: 'Obligations', icon: FileText },
   { id: 'Vendors', label: 'Vendor IQ', icon: ShieldCheck },
-  { id: 'Settings', label: 'Settings', icon: Settings2 },
   { id: 'Reports', label: 'Reports', icon: FileCheck2 },
+  { id: 'Settings', label: 'Settings', icon: Settings2 },
 ];
 
 const oohTabPaths: Record<OOHTab, string> = {
@@ -175,6 +176,7 @@ const campaignAddAssetValue = '__add_ooh_asset_from_campaign__';
 const allMarketsLabel = 'Markets';
 const marketOptions = [allMarketsLabel, 'Abu Dhabi', 'Dubai', 'Sharjah', 'Ajman', 'Umm Al Quwain', 'Ras Al Khaimah', 'Fujairah'];
 const recurrenceOptions: AssignmentForm['recurrence'][] = ['One-time', 'Weekly', 'Monthly', 'Quarterly'];
+const surveyScopeOptions = ['Material Installation', 'Quality Inspection', 'Proof of Posting', 'Permit / Access Check', 'DOOH Player Check', 'Maintenance Follow-up', 'Client Evidence Capture'];
 const defaultInstallationTeams = ['Falcon Field Team', 'Capital Survey Crew', 'Coastal QA Team', 'In-house Install Team', 'Certified Print Vendor'];
 const reportCards: OOHReportCard[] = [
   { id: 'campaign-evidence-pack', title: 'Campaign Evidence Pack', text: 'Client-ready proof, maps, survey scores and exception notes.', icon: FileCheck2 },
@@ -872,6 +874,7 @@ function buildCampaignForm(asset?: OOHAsset): CampaignForm {
 function buildAssignmentForm(assetId: string): AssignmentForm {
   return {
     assetId,
+    scope: ['Material Installation', 'Quality Inspection'],
     name: 'Installation proof and condition survey',
     team: 'Falcon Field Team',
     vendor: 'In-house',
@@ -5782,12 +5785,22 @@ export function OOHOperatorApp() {
     void runMutation(() => updateOOHAsset(selectedAsset.id, updates));
   };
 
+  const toggleAssignmentScope = (scope: string) => {
+    setAssignmentForm(current => {
+      const nextScope = current.scope.includes(scope)
+        ? current.scope.filter(item => item !== scope)
+        : [...current.scope, scope];
+      return { ...current, scope: nextScope };
+    });
+  };
+
   const handleCreateAssignment = () => {
     const asset = data.assets.find(item => item.id === assignmentForm.assetId) ?? selectedAsset;
     if (!asset) return;
     void runMutation(() => createOOHAssignment({
       name: assignmentForm.name,
       assetIds: [asset.id],
+      scope: assignmentForm.scope,
       team: assignmentForm.team,
       vendor: assignmentForm.vendor,
       recurrence: assignmentForm.recurrence,
@@ -6416,7 +6429,37 @@ export function OOHOperatorApp() {
             <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
               <h2 className="text-xl font-black text-white">Assign Field Survey</h2>
               <div className="mt-4 space-y-3">
-                <label className="block text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Asset scope<select className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assignmentForm.assetId} onChange={event => setAssignmentForm({ ...assignmentForm, assetId: event.target.value })}>{data.assets.map(asset => <option key={asset.id} value={asset.id}>{asset.id} - {asset.name}</option>)}</select></label>
+                <label className="block text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Asset<select className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assignmentForm.assetId} onChange={event => setAssignmentForm({ ...assignmentForm, assetId: event.target.value })}>{data.assets.map(asset => <option key={asset.id} value={asset.id}>{asset.id} - {asset.name}</option>)}</select></label>
+                <div className="block text-xs font-bold uppercase tracking-wide text-[#7A94B4]">
+                  Scope
+                  <details className="group relative mt-1">
+                    <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between gap-3 rounded-lg border border-white/10 bg-[#07111F] px-3 py-2 text-sm normal-case tracking-normal text-white outline-none transition hover:border-[#2E7FFF]/45">
+                      <span className="line-clamp-1">{assignmentForm.scope.length ? assignmentForm.scope.join(', ') : 'Select inspection objectives'}</span>
+                      <span className="text-xs font-black uppercase tracking-wide text-[#7EB8F7]">{assignmentForm.scope.length} selected</span>
+                    </summary>
+                    <div className="absolute left-0 right-0 z-30 mt-2 rounded-lg border border-[#2E7FFF]/35 bg-[#07111F] p-2 shadow-2xl shadow-black/40">
+                      <div className="grid gap-1">
+                        {surveyScopeOptions.map(option => (
+                          <label key={option} className="flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-sm normal-case tracking-normal text-white hover:bg-white/5">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded border-white/20 bg-[#0B172A] accent-[#2E7FFF]"
+                              checked={assignmentForm.scope.includes(option)}
+                              onChange={() => toggleAssignmentScope(option)}
+                            />
+                            <span>{option}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </details>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {assignmentForm.scope.map(scope => (
+                      <span key={scope} className="rounded-full border border-[#2E7FFF]/30 bg-[#2E7FFF]/12 px-2.5 py-1 text-[11px] font-bold normal-case tracking-normal text-[#D8E9FF]">{scope}</span>
+                    ))}
+                    {assignmentForm.scope.length === 0 && <span className="text-xs font-medium normal-case tracking-normal text-amber-100">Select at least one objective before dispatching the survey.</span>}
+                  </div>
+                </div>
                 <label className="block text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Survey name<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assignmentForm.name} onChange={event => setAssignmentForm({ ...assignmentForm, name: event.target.value })} /></label>
                 <div className="grid gap-3 md:grid-cols-2">
                   <label className="block text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Team<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assignmentForm.team} onChange={event => setAssignmentForm({ ...assignmentForm, team: event.target.value })} /></label>
@@ -6425,7 +6468,7 @@ export function OOHOperatorApp() {
                   <label className="block text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Due date<input type="date" className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assignmentForm.dueDate} onChange={event => setAssignmentForm({ ...assignmentForm, dueDate: event.target.value })} /></label>
                   <label className="block text-xs font-bold uppercase tracking-wide text-[#7A94B4] md:col-span-2">Reviewer<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assignmentForm.reviewer} onChange={event => setAssignmentForm({ ...assignmentForm, reviewer: event.target.value })} /></label>
                 </div>
-                <button className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#E11D2E] px-4 py-3 text-sm font-bold text-white" onClick={handleCreateAssignment} disabled={busy}>
+                <button className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#E11D2E] px-4 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-55" onClick={handleCreateAssignment} disabled={busy || assignmentForm.scope.length === 0}>
                   <ClipboardCheck size={16} /> Create Mobile Assignment
                 </button>
               </div>
@@ -6449,6 +6492,7 @@ export function OOHOperatorApp() {
                       </div>
                       <div className="mt-3 flex flex-wrap gap-2">
                         {assignmentAssets.map(asset => <Pill key={asset.id}>{asset.id}</Pill>)}
+                        {(assignment.scope ?? []).map(scope => <Pill key={scope} tone="border-[#2E7FFF]/30 bg-[#2E7FFF]/12 text-[#D8E9FF]">{scope}</Pill>)}
                         <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">{assignment.recurrence}</Pill>
                         {assignment.accessRules.qrScan && <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">QR required</Pill>}
                         {assignment.accessRules.gpsRequired && <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">GPS lock</Pill>}

@@ -70,6 +70,7 @@ export interface OOHSurveyAssignment {
   id: string;
   name: string;
   assetIds: string[];
+  scope?: string[];
   team: string;
   vendor: string;
   recurrence: 'One-time' | 'Weekly' | 'Monthly' | 'Quarterly';
