@@ -42,12 +42,44 @@ function readLocalClientPage(token: string): OOHClientPagePayload | null {
   }
 }
 
+function readLocalAssignments(): OOHSurveyAssignment[] {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    return Object.keys(localStorage)
+      .filter(key => key.startsWith('ooh-survey-assignment:'))
+      .map(key => JSON.parse(localStorage.getItem(key) ?? '') as OOHSurveyAssignment)
+      .filter(assignment => assignment && typeof assignment.id === 'string');
+  } catch {
+    return [];
+  }
+}
+
+function mergeLocalAssignments(store: OOHBootstrap): OOHBootstrap {
+  const localAssignments = readLocalAssignments();
+  if (!localAssignments.length) return store;
+  const remoteIds = new Set(store.assignments.map(assignment => assignment.id));
+  const mergedAssignments = [
+    ...localAssignments.filter(assignment => !remoteIds.has(assignment.id)),
+    ...store.assignments,
+  ];
+  return { ...store, assignments: mergedAssignments };
+}
+
+export function saveLocalOOHAssignment(assignment: OOHSurveyAssignment): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(`ooh-survey-assignment:${assignment.id}`, JSON.stringify(assignment));
+  } catch {
+    // The API remains the source of truth when local storage is unavailable.
+  }
+}
+
 export async function fetchOOHBootstrap(): Promise<OOHBootstrap> {
   try {
     const response = await fetch('/api/ooh/bootstrap');
-    return await readJson<OOHBootstrap>(response);
+    return mergeLocalAssignments(await readJson<OOHBootstrap>(response));
   } catch {
-    return fallbackOOHBootstrap;
+    return mergeLocalAssignments(fallbackOOHBootstrap);
   }
 }
 

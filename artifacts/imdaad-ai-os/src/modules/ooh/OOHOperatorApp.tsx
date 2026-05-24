@@ -41,11 +41,12 @@ import {
   createOOHClientPage,
   fetchOOHBootstrap,
   reviewOOHSubmission,
+  saveLocalOOHAssignment,
   updateOOHAsset,
 } from './api';
 import { fallbackOOHBootstrap, oohSurveyQuestions } from './seedData';
 import { assetPreviewPhotoAlt, assetPreviewPhotoSrc, evidencePhotoAlt, evidencePhotoObjectPosition, evidencePhotoSrc } from './evidenceVisual';
-import type { OOHEvidenceItem, OOHAsset, OOHBootstrap, OOHReviewStatus, OOHSubmission } from './types';
+import type { OOHEvidenceItem, OOHAsset, OOHBootstrap, OOHReviewStatus, OOHSubmission, OOHSurveyQuestion } from './types';
 
 type OOHTab = 'Command' | 'Assets' | 'GIS' | 'Surveys' | 'Evidence' | 'Clients' | 'Work Orders' | 'Obligations' | 'Vendors' | 'Settings' | 'Reports';
 
@@ -105,6 +106,20 @@ interface AssignmentForm {
   dueDate: string;
   reviewer: string;
 }
+
+interface AssignmentSuccessNotice {
+  id: string;
+  name: string;
+  assetName: string;
+  team: string;
+  reviewer: string;
+  scope: string[];
+  surveyLink: string;
+  resultsLink: string;
+  notifyOnSubmission: boolean;
+}
+
+type SurveyControlTab = 'Preview' | 'Active' | 'Expired';
 
 type OOHReportId = 'campaign-evidence-pack' | 'permit-watchlist' | 'survey-scorecard' | 'network-inventory' | 'installation-sla' | 'client-access-log';
 
@@ -177,7 +192,17 @@ const allMarketsLabel = 'Markets';
 const marketOptions = [allMarketsLabel, 'Abu Dhabi', 'Dubai', 'Sharjah', 'Ajman', 'Umm Al Quwain', 'Ras Al Khaimah', 'Fujairah'];
 const recurrenceOptions: AssignmentForm['recurrence'][] = ['One-time', 'Weekly', 'Monthly', 'Quarterly'];
 const surveyScopeOptions = ['Material Installation', 'Quality Inspection', 'Proof of Posting', 'Permit / Access Check', 'DOOH Player Check', 'Maintenance Follow-up', 'Client Evidence Capture'];
+const surveyControlTabs: SurveyControlTab[] = ['Preview', 'Active', 'Expired'];
 const defaultInstallationTeams = ['Falcon Field Team', 'Capital Survey Crew', 'Coastal QA Team', 'In-house Install Team', 'Certified Print Vendor'];
+const defaultReviewerOptions = ['Maya Haddad', 'Aisha Rahman', 'Omar Saleh', 'Noura Al Farsi', 'Compliance coordinator'];
+const rejectionReasonOptions = [
+  'Missing required close-up proof angle',
+  'Photo is blurred, cropped or unreadable',
+  'GPS location does not match the asset',
+  'Creative does not match the campaign booking',
+  'QR/NFC verification is missing',
+  'Permit, access or safety evidence is incomplete',
+];
 const reportCards: OOHReportCard[] = [
   { id: 'campaign-evidence-pack', title: 'Campaign Evidence Pack', text: 'Client-ready proof, maps, survey scores and exception notes.', icon: FileCheck2 },
   { id: 'permit-watchlist', title: 'Permit Watchlist', text: 'Expiry windows, municipal owner, route and access requirements.', icon: ShieldCheck },
@@ -188,7 +213,7 @@ const reportCards: OOHReportCard[] = [
 ];
 
 const integrationFeeds = [
-  { name: 'ERP operations', source: 'Asset master and booking state', status: 'Synced', at: '4 min ago' },
+  { name: 'WhatsApp gateway', source: 'Survey links, client evidence alerts and field notifications', status: 'Synced', at: '4 min ago' },
   { name: 'CRM / buyer desk', source: 'Client contacts and campaign account', status: 'Synced', at: '8 min ago' },
   { name: 'Media booking', source: 'Campaign flights, formats and assets', status: 'Synced', at: '12 min ago' },
   { name: 'Player / ad-server', source: 'DOOH uptime and playback readiness', status: 'Attention', at: '18 min ago' },
@@ -615,6 +640,28 @@ function absolutePath(path: string): string {
   return `${window.location.origin}${path}`;
 }
 
+async function copyTextToClipboard(value: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    const helper = document.createElement('textarea');
+    helper.value = value;
+    helper.setAttribute('readonly', '');
+    helper.style.position = 'fixed';
+    helper.style.opacity = '0';
+    document.body.appendChild(helper);
+    helper.select();
+    try {
+      return document.execCommand('copy');
+    } catch {
+      return false;
+    } finally {
+      document.body.removeChild(helper);
+    }
+  }
+}
+
 function buildNewAssetForm(): AssetForm {
   return {
     name: 'Airport Road Digital Gantry',
@@ -882,6 +929,65 @@ function buildAssignmentForm(assetId: string): AssignmentForm {
     dueDate: new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10),
     reviewer: 'Maya Haddad',
   };
+}
+
+const surveyQuestionsByScope: Record<string, OOHSurveyQuestion[]> = {
+  'Material Installation': [
+    { id: 'scope-material-installed', label: 'Display material installed on the correct asset face', type: 'pass_fail', required: true, evidenceRequired: true },
+    { id: 'scope-material-fixings', label: 'Fixings, frame, anchors or mounting points are secure', type: 'pass_fail', required: true, evidenceRequired: true },
+    { id: 'scope-material-finish', label: 'Installed material is aligned, clean and free from visible defects', type: 'pass_fail', required: true, evidenceRequired: true },
+  ],
+  'Quality Inspection': [
+    { id: 'scope-quality-condition', label: 'Structure, frame, vinyl or screen condition is acceptable', type: 'pass_fail', required: true, evidenceRequired: true },
+    { id: 'scope-quality-visibility', label: 'Asset visibility is clear from the expected viewing angle', type: 'pass_fail', required: true, evidenceRequired: true },
+    { id: 'scope-quality-obstructions', label: 'No obstruction, damage, dirt or lighting issue affects visibility', type: 'pass_fail', required: true, evidenceRequired: true },
+  ],
+  'Proof of Posting': [
+    { id: 'scope-pop-creative', label: 'Creative installed matches campaign booking and artwork reference', type: 'pass_fail', required: true, evidenceRequired: true },
+    { id: 'scope-pop-wide-close-angle', label: 'Wide, close-up and angle proof photos captured', type: 'photo', required: true, evidenceRequired: true },
+    { id: 'scope-pop-timestamp', label: 'Timestamp, GPS and QR evidence are attached to proof set', type: 'yes_no', required: true, evidenceRequired: true },
+  ],
+  'Permit / Access Check': [
+    { id: 'scope-permit-reference', label: 'Permit, NOC or site access reference is valid for this location', type: 'yes_no', required: true, evidenceRequired: true },
+    { id: 'scope-permit-window', label: 'Approved access window and working restrictions are confirmed', type: 'single_choice', required: true, options: ['Confirmed', 'Needs follow-up', 'Not applicable'] },
+    { id: 'scope-permit-owner', label: 'Site owner or authority condition has been recorded', type: 'text', required: true },
+  ],
+  'DOOH Player Check': [
+    { id: 'scope-dooh-player', label: 'Player, screen and power status are online', type: 'single_choice', required: true, evidenceRequired: true, options: ['Online', 'Needs attention', 'Offline'] },
+    { id: 'scope-dooh-playback', label: 'Campaign creative is playing in the correct loop or slot', type: 'pass_fail', required: true, evidenceRequired: true },
+    { id: 'scope-dooh-screen-photo', label: 'Screen playback photo captured with readable creative', type: 'photo', required: true, evidenceRequired: true },
+  ],
+  'Maintenance Follow-up': [
+    { id: 'scope-maintenance-issue', label: 'Previous issue or repair item has been resolved', type: 'pass_fail', required: true, evidenceRequired: true },
+    { id: 'scope-maintenance-notes', label: 'Maintenance notes, remaining blockers or parts required', type: 'text', required: true },
+    { id: 'scope-maintenance-photo', label: 'Before/after maintenance evidence captured where applicable', type: 'photo', required: true, evidenceRequired: true },
+  ],
+  'Client Evidence Capture': [
+    { id: 'scope-client-ready', label: 'Client-visible evidence is complete and suitable for publishing', type: 'pass_fail', required: true, evidenceRequired: true },
+    { id: 'scope-client-sensitive', label: 'Internal-only information, unsafe angles or unrelated people are excluded', type: 'yes_no', required: true },
+    { id: 'scope-client-summary', label: 'Client evidence note summarises install status, date and result', type: 'text', required: true },
+  ],
+};
+
+function buildSurveyQuestionsForScope(scopes: string[]): OOHSurveyQuestion[] {
+  const baseQuestions: OOHSurveyQuestion[] = [
+    { id: 'qr', label: 'Scan asset QR or NFC tag', type: 'text', required: true },
+    { id: 'gps', label: 'Confirm GPS position within accepted tolerance', type: 'gps', required: true },
+  ];
+  const scopedQuestions = scopes.flatMap(scope => surveyQuestionsByScope[scope] ?? []);
+  const closingQuestions: OOHSurveyQuestion[] = [
+    { id: 'photo', label: 'Capture overall survey photo evidence pack', type: 'photo', required: true, evidenceRequired: true },
+    { id: 'signature', label: 'Field supervisor sign-off', type: 'signature', required: true },
+  ];
+  const uniqueQuestions = [...baseQuestions, ...scopedQuestions, ...closingQuestions].filter((question, index, all) => (
+    index === all.findIndex(item => item.id === question.id)
+  ));
+  return uniqueQuestions.length ? uniqueQuestions : oohSurveyQuestions;
+}
+
+function isSurveyAssignmentExpired(assignment: OOHBootstrap['assignments'][number]): boolean {
+  const dueTime = Date.parse(assignment.dueDate);
+  return assignment.status === 'Overdue' || assignment.status === 'Rejected' || (Number.isFinite(dueTime) && dueTime < Date.now());
 }
 
 function getInitialOOHTab(): OOHTab {
@@ -1371,28 +1477,65 @@ function TeamSelectWithNew({
 }) {
   const cleanOptions = Array.from(new Set(options.map(option => option.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
   const isExistingTeam = cleanOptions.includes(value);
+  const createTeamValue = '__create_team__';
+  const selectValue = isExistingTeam ? value : createTeamValue;
   const controlClass = `${heightClass} w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none`;
 
   return (
     <label className="space-y-1 text-xs font-bold uppercase tracking-wide text-[#7A94B4]">
       {label}
-      <div className="mt-1 flex flex-col gap-2 sm:flex-row">
-        <select className={controlClass} value={isExistingTeam ? value : ''} onChange={event => onChange(event.target.value)}>
-          <option value="" disabled>Select installation team</option>
-          {cleanOptions.map(team => <option key={team} value={team}>{team}</option>)}
-        </select>
-        <button
-          type="button"
-          className={`${heightClass} inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-[#2E7FFF]/35 bg-[#2E7FFF]/12 px-4 text-sm font-black normal-case tracking-normal text-white hover:bg-[#2E7FFF]/20`}
-          onClick={() => onChange('')}
-        >
-          <Plus size={15} /> Add new team
-        </button>
-      </div>
+      <select
+        className={`mt-1 ${controlClass}`}
+        value={selectValue}
+        onChange={event => onChange(event.target.value === createTeamValue ? '' : event.target.value)}
+      >
+        {cleanOptions.map(team => <option key={team} value={team}>{team}</option>)}
+        <option value={createTeamValue}>+ Create Team</option>
+      </select>
       {!isExistingTeam && (
         <input
           className={`mt-2 ${controlClass}`}
-          placeholder="Enter new installation team"
+          placeholder="Enter new team name"
+          value={value}
+          onChange={event => onChange(event.target.value)}
+        />
+      )}
+    </label>
+  );
+}
+
+function ReviewerSelectWithNew({
+  value,
+  options,
+  onChange,
+  heightClass = 'h-10',
+}: {
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+  heightClass?: string;
+}) {
+  const cleanOptions = Array.from(new Set(options.map(option => option.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const addReviewerValue = '__add_reviewer__';
+  const isExistingReviewer = cleanOptions.includes(value);
+  const selectValue = isExistingReviewer ? value : addReviewerValue;
+  const controlClass = `${heightClass} w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none`;
+
+  return (
+    <label className="block text-xs font-bold uppercase tracking-wide text-[#7A94B4] md:col-span-2">
+      Reviewer
+      <select
+        className={`mt-1 ${controlClass}`}
+        value={selectValue}
+        onChange={event => onChange(event.target.value === addReviewerValue ? '' : event.target.value)}
+      >
+        {cleanOptions.map(reviewer => <option key={reviewer} value={reviewer}>{reviewer}</option>)}
+        <option value={addReviewerValue}>+ Add new reviewer</option>
+      </select>
+      {!isExistingReviewer && (
+        <input
+          className={`mt-2 ${controlClass}`}
+          placeholder="Enter new reviewer name"
           value={value}
           onChange={event => onChange(event.target.value)}
         />
@@ -1521,13 +1664,23 @@ function AssetMapPopupContent({
   asset,
   latestInspection,
   onSelect,
+  onOpenAssetDetails,
   contextLabel = 'OOH asset',
 }: {
   asset: OOHAsset;
   latestInspection?: OOHSubmission;
   onSelect?: (assetId: string) => void;
+  onOpenAssetDetails?: (assetId: string) => void;
   contextLabel?: string;
 }) {
+  const openAssetDetails = () => {
+    if (onOpenAssetDetails) {
+      onOpenAssetDetails(asset.id);
+      return;
+    }
+    onSelect?.(asset.id);
+  };
+
   return (
     <div className="w-[320px] max-w-[calc(100vw-56px)] overflow-hidden text-left">
       <div className="grid grid-cols-[112px_minmax(0,1fr)] border-b border-white/10">
@@ -1554,25 +1707,29 @@ function AssetMapPopupContent({
       </div>
 
       <div className="border-t border-white/10 bg-[#0B172A] p-2.5">
-        {latestInspection ? (
+        <div className={`grid gap-2 ${latestInspection ? 'grid-cols-2' : 'grid-cols-1'}`}>
+          <button
+            type="button"
+            className="flex h-8 w-full items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] text-xs font-black text-white hover:bg-[#4C91FF]"
+            onClick={event => {
+              event.stopPropagation();
+              openAssetDetails();
+            }}
+          >
+            Open Asset Details <ExternalLink size={13} />
+          </button>
+          {latestInspection && (
           <a
             aria-label={`Open latest inspection report for ${asset.name}`}
-            className="flex h-8 items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] text-xs font-black !text-white hover:bg-[#4C91FF]"
+            className="flex h-8 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 text-xs font-black !text-white hover:bg-white/10"
             href={`/ooh/report/${latestInspection.id}`}
             onClick={event => event.stopPropagation()}
             style={{ color: '#FFFFFF' }}
           >
-            <FileSearch size={14} /> Latest Report <ExternalLink size={13} />
+            <FileSearch size={14} /> Latest Report
           </a>
-        ) : (
-          <button
-            type="button"
-            className="flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 text-xs font-black text-[#D8E6F8] hover:bg-white/10"
-            onClick={() => onSelect?.(asset.id)}
-          >
-            Open Asset Details <ExternalLink size={13} />
-          </button>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1893,12 +2050,14 @@ function OOHMap({
   submissions,
   selectedAssetId,
   onSelect,
+  onOpenAssetDetails,
   heightClass = 'h-[420px]',
 }: {
   assets: OOHAsset[];
   submissions: OOHSubmission[];
   selectedAssetId: string;
   onSelect: (assetId: string) => void;
+  onOpenAssetDetails?: (assetId: string) => void;
   heightClass?: string;
 }) {
   const center = useMemo<[number, number]>(() => {
@@ -1921,7 +2080,7 @@ function OOHMap({
             eventHandlers={{ click: () => onSelect(asset.id) }}
           >
             <Popup className="ooh-asset-popup" maxWidth={320}>
-              <AssetMapPopupContent asset={asset} latestInspection={latestInspection} onSelect={onSelect} />
+              <AssetMapPopupContent asset={asset} latestInspection={latestInspection} onSelect={onSelect} onOpenAssetDetails={onOpenAssetDetails} />
             </Popup>
           </Marker>
         );
@@ -2010,6 +2169,7 @@ function LiveOperationsGisPanel({
   submissions,
   selectedAssetId,
   onSelectAsset,
+  onOpenAssetDetails,
   onOpenGIS,
   onOpenAssets,
   onOpenSurveys,
@@ -2021,6 +2181,7 @@ function LiveOperationsGisPanel({
   submissions: OOHSubmission[];
   selectedAssetId: string;
   onSelectAsset: (assetId: string) => void;
+  onOpenAssetDetails: (assetId: string) => void;
   onOpenGIS: () => void;
   onOpenAssets: () => void;
   onOpenSurveys: () => void;
@@ -2178,7 +2339,7 @@ function LiveOperationsGisPanel({
                 eventHandlers={{ click: () => onSelectAsset(asset.id) }}
               >
                 <Popup className="ooh-asset-popup" maxWidth={320}>
-                  <AssetMapPopupContent asset={asset} onSelect={onSelectAsset} contextLabel="Network asset" />
+                  <AssetMapPopupContent asset={asset} onSelect={onSelectAsset} onOpenAssetDetails={onOpenAssetDetails} contextLabel="Network asset" />
                 </Popup>
               </Marker>
             ))}
@@ -2430,7 +2591,7 @@ function LiveOperationsGisPanel({
                       eventHandlers={{ click: () => onSelectAsset(asset.id) }}
                     >
                       <Popup className="ooh-asset-popup" maxWidth={320}>
-                        <AssetMapPopupContent asset={asset} onSelect={onSelectAsset} contextLabel="Assigned asset" />
+                        <AssetMapPopupContent asset={asset} onSelect={onSelectAsset} onOpenAssetDetails={onOpenAssetDetails} contextLabel="Assigned asset" />
                       </Popup>
                     </Marker>
                   ))}
@@ -3149,6 +3310,7 @@ function OOHVendorIntelligence({
 
 type OOHWorkOrderStatus = 'Live' | 'Commissioned' | 'Install Scheduled' | 'Proof Review' | 'Rework' | 'Future Booking';
 type OOHWorkOrderFilter = 'all' | 'active' | 'install' | 'proof' | 'rework' | 'expiring' | 'future';
+type OOHWorkOrderActionType = 'Approve' | 'Reject' | 'Invoice' | 'Close';
 
 interface OOHCampaignWorkOrder {
   id: string;
@@ -3173,6 +3335,24 @@ interface OOHCampaignWorkOrder {
   latestSubmission?: OOHSubmission;
   futureBookings: string[];
   nextAction: string;
+}
+
+interface OOHWorkOrderActionState {
+  orderId: string;
+  type: OOHWorkOrderActionType;
+  note: string;
+}
+
+interface OOHWorkOrderActionRecord {
+  id: string;
+  orderId: string;
+  type: OOHWorkOrderActionType;
+  label: string;
+  detail: string;
+  note: string;
+  reference: string;
+  at: string;
+  statusAfter: OOHWorkOrderStatus;
 }
 
 function workOrderFileSlug(value: string): string {
@@ -3273,6 +3453,75 @@ function nextWorkOrderAction(asset: OOHAsset, status: OOHWorkOrderStatus): strin
   return 'Keep recurring survey and client evidence page current until campaign expiry.';
 }
 
+function workOrderActionCopy(type: OOHWorkOrderActionType, order: OOHCampaignWorkOrder) {
+  if (type === 'Invoice') {
+    return {
+      eyebrow: 'Invoice request',
+      title: 'Issue work order invoice',
+      helper: `Prepare the invoice pack for ${order.client} using the booked asset, campaign flight, artwork file and completion evidence.`,
+      confirm: 'Issue Invoice',
+      requiresNote: false,
+      placeholder: 'Optional internal note for finance, billing reference, purchase order or client contact.',
+    };
+  }
+  if (type === 'Reject') {
+    return {
+      eyebrow: 'Work order rejection',
+      title: 'Reject or return for rework',
+      helper: 'Record the operational reason before the work order is returned to the installer, vendor or account team.',
+      confirm: 'Reject Work Order',
+      requiresNote: true,
+      placeholder: 'Example: Artwork does not match approved file, close-up proof is missing, or installation cannot proceed until access/permit is corrected.',
+    };
+  }
+  if (type === 'Close') {
+    return {
+      eyebrow: 'Close work order',
+      title: 'Close campaign work order',
+      helper: 'Close the work order only when installation, proof, client evidence and required obligations are complete.',
+      confirm: 'Close Work Order',
+      requiresNote: false,
+      placeholder: 'Optional closure note, handover details or remaining watch items.',
+    };
+  }
+  return {
+    eyebrow: 'Approval decision',
+    title: 'Approve work order release',
+    helper: 'Approve the work order for installation or proof operations after artwork, access, permit and owner checks are ready.',
+    confirm: 'Approve Work Order',
+    requiresNote: false,
+    placeholder: 'Optional approval note for installer, vendor or account team.',
+  };
+}
+
+function workOrderActionReference(type: OOHWorkOrderActionType, at: string): string {
+  const prefix = type === 'Invoice' ? 'INV' : type === 'Reject' ? 'REJ' : type === 'Close' ? 'CLS' : 'APR';
+  return `${prefix}-${Date.parse(at).toString().slice(-6)}`;
+}
+
+function workOrderStatusAfterAction(type: OOHWorkOrderActionType, currentStatus: OOHWorkOrderStatus): OOHWorkOrderStatus {
+  if (type === 'Reject') return 'Rework';
+  if (type === 'Close') return 'Live';
+  if (type === 'Invoice') return currentStatus;
+  if (currentStatus === 'Future Booking') return 'Commissioned';
+  if (currentStatus === 'Commissioned') return 'Install Scheduled';
+  if (currentStatus === 'Install Scheduled' || currentStatus === 'Rework') return 'Proof Review';
+  return currentStatus;
+}
+
+function workOrderActionDetail(type: OOHWorkOrderActionType, order: OOHCampaignWorkOrder, statusAfter: OOHWorkOrderStatus, note: string): string {
+  if (type === 'Invoice') {
+    return `Invoice pack prepared for ${order.flightLabel}, artwork ${order.artworkFile}, and current proof state ${order.asset.evidenceStatus}.`;
+  }
+  if (type === 'Reject') {
+    return `Returned to rework queue with installer/account team action required${note ? `: ${note}` : '.'}`;
+  }
+  if (type === 'Close') {
+    return `Campaign work order closed with proof state ${order.asset.evidenceStatus}; asset remains visible for future booking controls.`;
+  }
+  return `Approval recorded and visible status moved to ${statusAfter}.`;
+}
+
 function buildOOHWorkOrders(data: OOHBootstrap): OOHCampaignWorkOrder[] {
   return data.assets.map(asset => {
     const linkedAssignment = data.assignments.find(assignment => assignment.assetIds.includes(asset.id));
@@ -3338,30 +3587,39 @@ function OOHWorkOrders({
   onOpenClientPages: () => void;
 }) {
   const workOrders = useMemo(() => buildOOHWorkOrders(data), [data]);
-  const metricsUpdatedAt = useMemo(() => new Date().toISOString(), [workOrders]);
   const [selectedOrderId, setSelectedOrderId] = useState('');
   const [filter, setFilter] = useState<OOHWorkOrderFilter>('all');
   const [search, setSearch] = useState('');
+  const [workOrderAction, setWorkOrderAction] = useState<OOHWorkOrderActionState | null>(null);
+  const [workOrderNotice, setWorkOrderNotice] = useState('');
+  const [workOrderActionRecords, setWorkOrderActionRecords] = useState<OOHWorkOrderActionRecord[]>([]);
+  const [workOrderStatusOverrides, setWorkOrderStatusOverrides] = useState<Record<string, OOHWorkOrderStatus>>({});
+  const metricsUpdatedAt = useMemo(() => new Date().toISOString(), [workOrders, workOrderStatusOverrides]);
+  const displayStatusFor = (order: OOHCampaignWorkOrder): OOHWorkOrderStatus => workOrderStatusOverrides[order.id] ?? order.status;
   const selectedOrder = workOrders.find(order => order.id === selectedOrderId) ?? workOrders.find(order => order.asset.id === selectedAssetId) ?? workOrders[0];
+  const selectedOrderStatus = selectedOrder ? displayStatusFor(selectedOrder) : 'Commissioned';
+  const selectedOrderNextAction = selectedOrder ? nextWorkOrderAction(selectedOrder.asset, selectedOrderStatus) : '';
+  const selectedOrderRecords = selectedOrder ? workOrderActionRecords.filter(record => record.orderId === selectedOrder.id) : [];
   useEffect(() => {
     const focusedOrder = workOrders.find(order => order.asset.id === selectedAssetId);
     if (focusedOrder) setSelectedOrderId(focusedOrder.id);
   }, [selectedAssetId, workOrders]);
-  const activeOrders = workOrders.filter(order => order.status !== 'Future Booking' && order.daysToExpiry >= 0);
+  const activeOrders = workOrders.filter(order => displayStatusFor(order) !== 'Future Booking' && order.daysToExpiry >= 0);
   const proofActionOrders = workOrders.filter(order => order.asset.evidenceStatus !== 'Ready');
-  const installOrders = workOrders.filter(order => order.status === 'Install Scheduled');
+  const installOrders = workOrders.filter(order => displayStatusFor(order) === 'Install Scheduled');
   const expiringOrders = workOrders.filter(order => order.daysToExpiry >= 0 && order.daysToExpiry <= 14);
   const futureCount = workOrders.reduce((sum, order) => sum + order.futureBookings.length, 0);
   const filteredOrders = workOrders.filter(order => {
+    const orderStatus = displayStatusFor(order);
     const haystack = `${order.id} ${order.campaign} ${order.client} ${order.asset.name} ${order.asset.market} ${order.artworkFile} ${order.installedBy}`.toLowerCase();
     const matchesSearch = haystack.includes(search.toLowerCase());
     if (!matchesSearch) return false;
     if (filter === 'active') return activeOrders.some(item => item.id === order.id);
-    if (filter === 'install') return order.status === 'Install Scheduled';
+    if (filter === 'install') return orderStatus === 'Install Scheduled';
     if (filter === 'proof') return order.asset.evidenceStatus !== 'Ready';
-    if (filter === 'rework') return order.status === 'Rework';
+    if (filter === 'rework') return orderStatus === 'Rework';
     if (filter === 'expiring') return order.daysToExpiry >= 0 && order.daysToExpiry <= 14;
-    if (filter === 'future') return order.status === 'Future Booking' || order.futureBookings.length > 0;
+    if (filter === 'future') return orderStatus === 'Future Booking' || order.futureBookings.length > 0;
     return true;
   });
   const filters: Array<{ id: OOHWorkOrderFilter; label: string }> = [
@@ -3388,6 +3646,47 @@ function OOHWorkOrders({
     onSelectAsset(selectedOrder.asset.id);
     onOpenEvidence();
   };
+  const openSelectedClientPage = () => {
+    if (!selectedOrder) return;
+    onSelectAsset(selectedOrder.asset.id);
+    onOpenClientPages();
+  };
+  const openWorkOrderAction = (type: OOHWorkOrderActionType) => {
+    if (!selectedOrder) return;
+    const defaultNote = type === 'Reject'
+      ? (selectedOrderStatus === 'Rework' ? selectedOrderNextAction : '')
+      : '';
+    setWorkOrderAction({ orderId: selectedOrder.id, type, note: defaultNote });
+  };
+  const confirmWorkOrderAction = () => {
+    if (!workOrderAction) return;
+    const order = workOrders.find(item => item.id === workOrderAction.orderId);
+    if (!order) return;
+    const copy = workOrderActionCopy(workOrderAction.type, order);
+    if (copy.requiresNote && !workOrderAction.note.trim()) return;
+    const currentStatus = displayStatusFor(order);
+    const at = new Date().toISOString();
+    const statusAfter = workOrderStatusAfterAction(workOrderAction.type, currentStatus);
+    const note = workOrderAction.note.trim();
+    const reference = workOrderActionReference(workOrderAction.type, at);
+    const detail = workOrderActionDetail(workOrderAction.type, order, statusAfter, note);
+    const record: OOHWorkOrderActionRecord = {
+      id: `${order.id}-${reference}`,
+      orderId: order.id,
+      type: workOrderAction.type,
+      label: copy.confirm,
+      detail,
+      note,
+      reference,
+      at,
+      statusAfter,
+    };
+    setWorkOrderActionRecords(current => [record, ...current].slice(0, 40));
+    setWorkOrderStatusOverrides(current => ({ ...current, [order.id]: statusAfter }));
+    setSelectedOrderId(order.id);
+    setWorkOrderNotice(`${copy.confirm} recorded as ${reference}. ${detail}`);
+    setWorkOrderAction(null);
+  };
 
   if (!selectedOrder) return null;
 
@@ -3399,14 +3698,6 @@ function OOHWorkOrders({
             <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#7EB8F7]">OOH campaign operations</p>
             <h2 className="mt-1 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Campaign Work Orders</h2>
             <p className="mt-2 max-w-4xl text-sm leading-6 text-[#B8C7DB]">Client-commissioned campaigns with asset location, artwork used, installation owner, proof status, expiry and next booking visibility.</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-black text-white hover:bg-white/10" onClick={assignSelectedSurvey}>
-              <ClipboardCheck size={16} /> Assign Survey
-            </button>
-            <button type="button" className="inline-flex items-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={reviewSelectedProof}>
-              <Camera size={16} /> Review Proof
-            </button>
           </div>
         </div>
 
@@ -3467,6 +3758,7 @@ function OOHWorkOrders({
           <div className="mt-4 space-y-2">
             {filteredOrders.map(order => {
               const active = selectedOrder.id === order.id;
+              const orderStatus = displayStatusFor(order);
               const daysLabel = order.daysToExpiry >= 0 ? `${order.daysToExpiry} days left` : 'Expired';
               return (
                 <button
@@ -3492,7 +3784,7 @@ function OOHWorkOrders({
                     <span className="mt-1 block truncate text-xs text-[#9DB4D0]">{order.installedBy}</span>
                   </div>
                   <div className="flex min-w-0 flex-col items-start gap-2 lg:items-end">
-                    <Pill tone={workOrderStatusTone(order.status)}>{order.status}</Pill>
+                    <Pill tone={workOrderStatusTone(orderStatus)}>{orderStatus}</Pill>
                     <span className={order.daysToExpiry <= 7 ? 'text-xs font-bold text-amber-100' : 'text-xs text-[#9DB4D0]'}>
                       {daysLabel}
                     </span>
@@ -3517,7 +3809,7 @@ function OOHWorkOrders({
                   <h3 className="mt-1 text-2xl font-black leading-tight text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{selectedOrder.campaign}</h3>
                   <p className="mt-2 text-sm leading-5 text-[#9DB4D0]">{selectedOrder.client} - {selectedOrder.buyer}</p>
                 </div>
-                <Pill tone={workOrderStatusTone(selectedOrder.status)}>{selectedOrder.status}</Pill>
+                <Pill tone={workOrderStatusTone(selectedOrderStatus)}>{selectedOrderStatus}</Pill>
               </div>
             </div>
 
@@ -3566,22 +3858,87 @@ function OOHWorkOrders({
 
               <div className="rounded-lg border border-amber-300/20 bg-amber-300/10 p-3">
                 <p className="text-[10px] font-black uppercase tracking-wide text-amber-100">Operator next action</p>
-                <p className="mt-2 text-sm leading-6 text-white">{selectedOrder.nextAction}</p>
+                <p className="mt-2 text-sm leading-6 text-white">{selectedOrderNextAction}</p>
+              </div>
+
+              {workOrderNotice && (
+                <div className="rounded-lg border border-emerald-300/20 bg-emerald-400/10 p-3">
+                  <p className="text-[10px] font-black uppercase tracking-wide text-emerald-100">Last work order action</p>
+                  <p className="mt-2 text-sm leading-6 text-emerald-50">{workOrderNotice}</p>
+                </div>
+              )}
+
+              <div className="rounded-lg border border-[#2E7FFF]/25 bg-[#07111F] p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">Work order action trail</p>
+                  <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">{`${selectedOrderRecords.length} recorded`}</Pill>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {selectedOrderRecords.length > 0 ? selectedOrderRecords.slice(0, 4).map(record => {
+                    const ActionIcon = record.type === 'Invoice' ? FileText : record.type === 'Reject' ? AlertTriangle : record.type === 'Close' ? FileCheck2 : CheckCircle2;
+                    const iconTone = record.type === 'Reject'
+                      ? 'border-red-300/25 bg-red-400/10 text-red-100'
+                      : record.type === 'Invoice'
+                        ? 'border-blue-300/25 bg-blue-400/10 text-blue-100'
+                        : 'border-emerald-300/25 bg-emerald-400/10 text-emerald-100';
+                    return (
+                      <div key={record.id} className="grid gap-3 rounded-lg border border-white/10 bg-[#0B172A] p-3 sm:grid-cols-[36px_minmax(0,1fr)]">
+                        <div className={`flex h-9 w-9 items-center justify-center rounded-lg border ${iconTone}`}>
+                          <ActionIcon size={16} />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-sm font-black text-white">{record.label}</p>
+                            <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 font-mono text-[10px] font-black text-[#7EB8F7]">{record.reference}</span>
+                          </div>
+                          <p className="mt-1 text-xs leading-5 text-[#B8C7DB]">{record.detail}</p>
+                          <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] font-bold uppercase tracking-wide text-[#7A94B4]">
+                            <span>{formatDateTime(record.at)}</span>
+                            <span className="h-1 w-1 rounded-full bg-[#365474]" />
+                            <span>Status after: {record.statusAfter}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }) : (
+                    <div className="rounded-lg border border-dashed border-white/10 bg-[#0B172A] p-3 text-sm leading-6 text-[#9DB4D0]">
+                      Use the work-order buttons to record approvals, rework reasons, invoice packs and closure decisions. The latest actions will appear here with references and timestamps.
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="grid gap-2 sm:grid-cols-2">
-                <button type="button" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-4 py-3 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={openSelectedAsset}>
-                  Open Asset <ExternalLink size={15} />
+                <button type="button" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-emerald-300/25 bg-emerald-400/10 px-4 py-3 text-sm font-black text-emerald-100 hover:bg-emerald-400/15" onClick={() => openWorkOrderAction('Approve')}>
+                  Approve Work Order <CheckCircle2 size={15} />
                 </button>
-                <button type="button" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm font-black text-white hover:bg-white/10" onClick={reviewSelectedProof}>
-                  Review Proof <Camera size={15} />
+                <button type="button" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-red-300/25 bg-red-400/10 px-4 py-3 text-sm font-black text-red-100 hover:bg-red-400/15" onClick={() => openWorkOrderAction('Reject')}>
+                  Reject / Rework <AlertTriangle size={15} />
                 </button>
-                <button type="button" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm font-black text-white hover:bg-white/10" onClick={assignSelectedSurvey}>
-                  Assign Survey <ClipboardCheck size={15} />
+                <button type="button" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-4 py-3 text-sm font-black text-white hover:bg-[#4C91FF]" onClick={() => openWorkOrderAction('Invoice')}>
+                  Issue Invoice <FileText size={15} />
                 </button>
-                <button type="button" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm font-black text-white hover:bg-white/10" onClick={onOpenClientPages}>
-                  Client Page <Globe2 size={15} />
+                <button type="button" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm font-black text-white hover:bg-white/10" onClick={() => openWorkOrderAction('Close')}>
+                  Close Order <FileCheck2 size={15} />
                 </button>
+              </div>
+
+              <div className="rounded-lg border border-white/10 bg-[#07111F] p-3">
+                <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">Linked controls</p>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-black text-white hover:bg-white/10" onClick={openSelectedAsset}>
+                    Asset <ExternalLink size={13} />
+                  </button>
+                  <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-black text-white hover:bg-white/10" onClick={reviewSelectedProof}>
+                    Proof <Camera size={13} />
+                  </button>
+                  <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-black text-white hover:bg-white/10" onClick={assignSelectedSurvey}>
+                    Survey <ClipboardCheck size={13} />
+                  </button>
+                  <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-black text-white hover:bg-white/10" onClick={openSelectedClientPage}>
+                    Client Page <Globe2 size={13} />
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -3620,6 +3977,123 @@ function OOHWorkOrders({
           </div>
         </aside>
       </div>
+      {workOrderAction && (() => {
+        const actionOrder = workOrders.find(order => order.id === workOrderAction.orderId);
+        if (!actionOrder) return null;
+        const copy = workOrderActionCopy(workOrderAction.type, actionOrder);
+        const isReject = workOrderAction.type === 'Reject';
+        const currentStatus = displayStatusFor(actionOrder);
+        const statusAfter = workOrderStatusAfterAction(workOrderAction.type, currentStatus);
+        const actionPreview = workOrderActionDetail(workOrderAction.type, actionOrder, statusAfter, workOrderAction.note.trim());
+        return (
+          <div className="fixed inset-0 z-[3200] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" role="presentation" onClick={() => setWorkOrderAction(null)}>
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="work-order-action-title"
+              className="flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-[#2E7FFF]/35 bg-[#081426] shadow-2xl shadow-black/50"
+              onClick={event => event.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4 border-b border-white/10 bg-[#0B172A] p-5">
+                <div>
+                  <p className={`text-[11px] font-black uppercase tracking-[0.22em] ${isReject ? 'text-red-200' : 'text-[#7EB8F7]'}`}>{copy.eyebrow}</p>
+                  <h2 id="work-order-action-title" className="mt-1 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{copy.title}</h2>
+                  <p className="mt-2 max-w-2xl text-sm leading-6 text-[#9DB4D0]">{copy.helper}</p>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Close work order action"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-[#B8C7DB] hover:bg-white/10 hover:text-white"
+                  onClick={() => setWorkOrderAction(null)}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="min-h-0 space-y-4 overflow-y-auto p-5">
+                <div className="grid gap-3 md:grid-cols-5">
+                  {[
+                    ['Work order', actionOrder.id],
+                    ['Client', actionOrder.client],
+                    ['Campaign', actionOrder.campaign],
+                    ['Current status', currentStatus],
+                    ['After action', statusAfter],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-lg border border-white/10 bg-[#07111F] p-3">
+                      <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
+                      <p className="mt-1 break-words text-sm font-black text-white">{value}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+                    <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">Booked asset and flight</p>
+                    <p className="mt-2 text-base font-black text-white">{actionOrder.asset.name}</p>
+                    <p className="mt-1 text-sm leading-6 text-[#9DB4D0]">{actionOrder.asset.market} - {actionOrder.flightLabel}</p>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+                    <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">Artwork package</p>
+                    <p className="mt-2 text-base font-black text-white">{actionOrder.artworkTitle}</p>
+                    <p className="mt-1 break-all font-mono text-xs leading-5 text-[#9DB4D0]">{actionOrder.artworkFile}</p>
+                  </div>
+                </div>
+
+                <div className={`rounded-lg border p-4 ${isReject ? 'border-red-300/20 bg-red-400/10' : 'border-[#2E7FFF]/25 bg-[#102343]'}`}>
+                  <p className={`text-[10px] font-black uppercase tracking-wide ${isReject ? 'text-red-100' : 'text-[#7EB8F7]'}`}>Action result preview</p>
+                  <p className="mt-2 text-sm leading-6 text-white">{actionPreview}</p>
+                </div>
+
+                {isReject && (
+                  <div className="rounded-lg border border-red-300/20 bg-red-400/10 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-wide text-red-100">Common rejection reasons</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {['Artwork mismatch', 'Proof evidence incomplete', 'Permit or access blocker', 'Installer assignment issue', 'Quality or damage issue'].map(reason => (
+                        <button
+                          key={reason}
+                          type="button"
+                          className="rounded-full border border-red-200/20 bg-red-400/10 px-3 py-1.5 text-xs font-bold text-red-100 hover:bg-red-400/18"
+                          onClick={() => setWorkOrderAction(current => current ? { ...current, note: current.note.trim() ? `${current.note.trim()}\n${reason}` : reason } : current)}
+                        >
+                          {reason}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <label className="block text-xs font-bold uppercase tracking-wide text-[#7A94B4]">
+                  {copy.requiresNote ? 'Required reason' : 'Action note'}
+                  <textarea
+                    className="mt-1 min-h-[118px] w-full rounded-lg border border-white/10 bg-[#07111F] px-3 py-3 text-sm normal-case tracking-normal text-white outline-none focus:border-[#2E7FFF]/50"
+                    placeholder={copy.placeholder}
+                    value={workOrderAction.note}
+                    onChange={event => setWorkOrderAction(current => current ? { ...current, note: event.target.value } : current)}
+                  />
+                </label>
+
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    className="inline-flex min-h-11 items-center justify-center rounded-lg border border-white/10 bg-white/5 px-5 py-2 text-sm font-bold text-white hover:bg-white/10"
+                    onClick={() => setWorkOrderAction(null)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className={`inline-flex min-h-11 items-center justify-center rounded-lg px-5 py-2 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50 ${isReject ? 'bg-[#E11D2E] hover:bg-[#ff3445]' : 'bg-[#2E7FFF] hover:bg-[#4C91FF]'}`}
+                    onClick={confirmWorkOrderAction}
+                    disabled={copy.requiresNote && !workOrderAction.note.trim()}
+                  >
+                    {copy.confirm}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </section>
   );
 }
@@ -3769,6 +4243,30 @@ function obligationAiInstructions(item: OOHObligation): { objective: string; ste
     closure: closure[item.category],
     forms: forms[item.category],
   };
+}
+
+function obligationSharePath(item: OOHObligation): string {
+  return `/ooh/obligations?asset=${encodeURIComponent(item.asset.id)}&obligation=${encodeURIComponent(item.code)}`;
+}
+
+function obligationShareMessage(item: OOHObligation): string {
+  return [
+    `OOH obligation action required: ${item.title}`,
+    '',
+    `Code: ${item.code}`,
+    `Status: ${item.status}`,
+    `Due: ${formatDate(item.dueDate)}`,
+    `Owner: ${item.owner}`,
+    `Asset: ${item.asset.name}`,
+    `Campaign: ${item.campaign}`,
+    `Client: ${item.client}`,
+    `Market / route: ${item.market} / ${item.asset.route}`,
+    '',
+    `Required action: ${item.action}`,
+    `Authority: ${item.authority}`,
+    '',
+    absolutePath(obligationSharePath(item)),
+  ].join('\n');
 }
 
 function assetNeedsTrafficAuthorization(asset: OOHAsset): boolean {
@@ -4084,6 +4582,8 @@ function OOHObligations({
   const [marketFilter, setMarketFilter] = useState(allMarketsLabel);
   const [selectedId, setSelectedId] = useState('');
   const [aiObligation, setAiObligation] = useState<OOHObligation | null>(null);
+  const [shareObligation, setShareObligation] = useState<OOHObligation | null>(null);
+  const [shareCopyNotice, setShareCopyNotice] = useState<{ kind: 'message' | 'link'; copied: boolean } | null>(null);
   const markets = useMemo(() => Array.from(new Set([...marketOptions, ...data.assets.map(asset => asset.market).filter(Boolean)])), [data.assets]);
   const filtered = obligations.filter(item => {
     const haystack = `${item.code} ${item.title} ${item.description} ${item.asset.name} ${item.market} ${item.campaign} ${item.client} ${item.owner} ${item.authority}`.toLowerCase();
@@ -4108,6 +4608,18 @@ function OOHObligations({
     onSelectAsset(item.asset.id);
   };
   const aiGuide = aiObligation ? obligationAiInstructions(aiObligation) : null;
+  const shareGuide = shareObligation ? obligationAiInstructions(shareObligation) : null;
+  const copyObligationShare = async (kind: 'message' | 'link') => {
+    if (!shareObligation) return;
+    const value = kind === 'message'
+      ? obligationShareMessage(shareObligation)
+      : absolutePath(obligationSharePath(shareObligation));
+    const copied = await copyTextToClipboard(value);
+    setShareCopyNotice({ kind, copied });
+    window.setTimeout(() => {
+      setShareCopyNotice(current => current?.kind === kind ? null : current);
+    }, 2200);
+  };
 
   if (!selected) return null;
 
@@ -4194,7 +4706,7 @@ function OOHObligations({
                   <th className="px-4 py-3">Due</th>
                   <th className="min-w-[220px] px-4 py-3">Owner</th>
                   <th className="min-w-[150px] px-4 py-3 pr-6">Status</th>
-                  <th className="min-w-[130px] px-4 py-3 pr-6 text-right">AI guide</th>
+                  <th className="min-w-[220px] px-4 py-3 pr-6 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -4237,18 +4749,32 @@ function OOHObligations({
                       <td className="min-w-[150px] px-4 py-4 pr-6 align-top">
                         <Pill tone={obligationStatusTone(item.status)} className="min-w-[96px]">{item.status}</Pill>
                       </td>
-                      <td className="min-w-[130px] px-4 py-4 pr-6 align-top text-right">
-                        <button
-                          type="button"
-                          className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-[#2E7FFF]/35 bg-[#2E7FFF]/12 px-3 py-2 text-xs font-black text-[#D8E9FF] hover:bg-[#2E7FFF]/20"
-                          onClick={event => {
-                            event.stopPropagation();
-                            selectObligation(item);
-                            setAiObligation(item);
-                          }}
-                        >
-                          <BrainCircuit size={14} /> Ask AI
-                        </button>
+                      <td className="min-w-[220px] px-4 py-4 pr-6 align-top text-right">
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <button
+                            type="button"
+                            className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-[#2E7FFF]/35 bg-[#2E7FFF]/12 px-3 py-2 text-xs font-black text-[#D8E9FF] hover:bg-[#2E7FFF]/20"
+                            onClick={event => {
+                              event.stopPropagation();
+                              selectObligation(item);
+                              setAiObligation(item);
+                            }}
+                          >
+                            <BrainCircuit size={14} /> Ask AI
+                          </button>
+                          <button
+                            type="button"
+                            className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-emerald-300/25 bg-emerald-400/10 px-3 py-2 text-xs font-black text-emerald-100 hover:bg-emerald-400/15"
+                            onClick={event => {
+                              event.stopPropagation();
+                              selectObligation(item);
+                              setShareObligation(item);
+                              setShareCopyNotice(null);
+                            }}
+                          >
+                            <Link2 size={14} /> Share
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -4374,6 +4900,134 @@ function OOHObligations({
                           <p key={item} className="rounded-lg border border-emerald-300/15 bg-[#07111F]/70 p-3 text-sm leading-5 text-white">{item}</p>
                         ))}
                       </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {shareObligation && shareGuide && (
+        <div className="fixed inset-0 z-[3200] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" role="presentation" onClick={() => setShareObligation(null)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="obligation-share-title"
+            className="flex max-h-[calc(100vh-2rem)] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-emerald-300/25 bg-[#081426] shadow-2xl shadow-black/50"
+            onClick={event => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 bg-[#0B172A] p-5">
+              <div className="flex items-start gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-emerald-300/25 bg-emerald-400/10 text-emerald-100">
+                  <Link2 size={21} />
+                </div>
+                <div>
+                  <p className="text-[11px] font-black uppercase tracking-[0.22em] text-emerald-200">Share obligation</p>
+                  <h2 id="obligation-share-title" className="mt-1 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>{shareObligation.title}</h2>
+                  <p className="mt-2 max-w-2xl text-sm leading-6 text-[#9DB4D0]">
+                    Send the exact obligation, owner, due date, asset context and required action to the team responsible for closing it.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                aria-label="Close obligation share"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-[#B8C7DB] hover:bg-white/10 hover:text-white"
+                onClick={() => setShareObligation(null)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="min-h-0 overflow-y-auto p-5">
+              <div className="grid gap-4 lg:grid-cols-[1fr_1.05fr]">
+                <div className="space-y-4">
+                  <div className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-mono text-xs font-black uppercase tracking-[0.18em] text-[#7EB8F7]">{shareObligation.code}</p>
+                        <h3 className="mt-2 text-xl font-black text-white">{shareObligation.asset.name}</h3>
+                        <p className="mt-1 text-sm leading-6 text-[#9DB4D0]">{shareObligation.campaign} - {shareObligation.client}</p>
+                      </div>
+                      <Pill tone={obligationStatusTone(shareObligation.status)}>{shareObligation.status}</Pill>
+                    </div>
+                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                      {[
+                        ['Owner', shareObligation.owner],
+                        ['Due', formatDate(shareObligation.dueDate)],
+                        ['Authority', shareObligation.authority],
+                        ['Market / route', `${shareObligation.market} / ${shareObligation.asset.route}`],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-lg border border-white/10 bg-[#0B172A] p-3">
+                          <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
+                          <p className="mt-1 text-sm font-black leading-5 text-white">{value}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-amber-300/20 bg-amber-300/10 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-wide text-amber-100">Required action</p>
+                    <p className="mt-2 text-sm leading-6 text-white">{shareObligation.action}</p>
+                  </div>
+
+                  <div className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+                    <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">Forms to include</p>
+                    <div className="mt-3 grid gap-2">
+                      {shareGuide.forms.map(form => (
+                        <a
+                          key={form.href}
+                          href={form.href}
+                          className="flex items-start justify-between gap-3 rounded-lg border border-white/10 bg-[#0B172A] p-3 text-left hover:border-[#7EB8F7]/45 hover:bg-[#102343]/70"
+                        >
+                          <span>
+                            <span className="block text-sm font-black text-white">{form.label}</span>
+                            <span className="mt-1 block text-xs leading-5 text-[#9DB4D0]">{form.helper}</span>
+                          </span>
+                          <ExternalLink size={14} className="mt-1 shrink-0 text-[#7EB8F7]" />
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="rounded-lg border border-[#2E7FFF]/25 bg-[#07111F] p-4">
+                    <p className="text-[10px] font-black uppercase tracking-wide text-[#7EB8F7]">Prepared message</p>
+                    <textarea
+                      readOnly
+                      className="mt-3 h-80 w-full resize-none rounded-lg border border-white/10 bg-[#0B172A] p-3 font-mono text-xs leading-5 text-[#DCE8F6] outline-none"
+                      value={obligationShareMessage(shareObligation)}
+                    />
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-4 py-3 text-sm font-black text-white hover:bg-[#4C91FF]"
+                        onClick={() => void copyObligationShare('message')}
+                      >
+                        <Copy size={15} /> {shareCopyNotice?.kind === 'message' ? (shareCopyNotice.copied ? 'Message copied' : 'Copy blocked') : 'Copy Message'}
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm font-black text-white hover:bg-white/10"
+                        onClick={() => void copyObligationShare('link')}
+                      >
+                        <Link2 size={15} /> {shareCopyNotice?.kind === 'link' ? (shareCopyNotice.copied ? 'Link copied' : 'Copy blocked') : 'Copy Link'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-emerald-300/20 bg-emerald-400/10 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-wide text-emerald-100">What the recipient receives</p>
+                    <div className="mt-3 grid gap-2">
+                      {['Exact obligation code and status', 'Asset, campaign and client context', 'Due date, owner and authority path', 'Direct link back to the obligation and required forms'].map(item => (
+                        <div key={item} className="flex gap-2 rounded-lg border border-emerald-300/15 bg-[#07111F]/70 p-3 text-sm leading-5 text-white">
+                          <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-emerald-200" />
+                          <span>{item}</span>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -5294,6 +5948,7 @@ export function OOHOperatorApp() {
   const [selectedAssetId, setSelectedAssetId] = useState(fallbackOOHBootstrap.assets[0]?.id ?? '');
   const [assetForm, setAssetForm] = useState<AssetForm>(buildNewAssetForm);
   const [assignmentForm, setAssignmentForm] = useState<AssignmentForm>(buildAssignmentForm(fallbackOOHBootstrap.assets[0]?.id ?? ''));
+  const [surveyControlTab, setSurveyControlTab] = useState<SurveyControlTab>('Preview');
   const [searchTerm, setSearchTerm] = useState('');
   const [marketFilter, setMarketFilter] = useState(allMarketsLabel);
   const [busy, setBusy] = useState(false);
@@ -5313,10 +5968,18 @@ export function OOHOperatorApp() {
   const [copyNotice, setCopyNotice] = useState<{ path: string; copied: boolean } | null>(null);
   const [activeReportId, setActiveReportId] = useState<OOHReportId | null>(null);
   const [clientShareModal, setClientShareModal] = useState<{ row: OOHClientBookingRow; page: OOHBootstrap['clientPages'][number] } | null>(null);
+  const [assignmentSuccess, setAssignmentSuccess] = useState<AssignmentSuccessNotice | null>(null);
+  const [rejectionModal, setRejectionModal] = useState<{ submissionId: string; reason: string } | null>(null);
   const navigateToTab = (tab: OOHTab) => {
     setActiveTab(tab);
     const nextPath = oohTabPaths[tab];
     if (window.location.pathname !== nextPath) window.history.pushState({}, '', nextPath);
+  };
+  const openAssetInRegister = (assetId: string) => {
+    setSelectedAssetId(assetId);
+    setSearchTerm('');
+    setMarketFilter(allMarketsLabel);
+    navigateToTab('Assets');
   };
 
   useEffect(() => {
@@ -5335,7 +5998,7 @@ export function OOHOperatorApp() {
   }, []);
 
   useEffect(() => {
-    if (!metricModalId && !locationAssetId && !assetModalOpen && !campaignModalOpen && !activeReportId && !clientShareModal) return undefined;
+    if (!metricModalId && !locationAssetId && !assetModalOpen && !campaignModalOpen && !activeReportId && !clientShareModal && !assignmentSuccess && !rejectionModal) return undefined;
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setMetricModalId(null);
@@ -5344,11 +6007,13 @@ export function OOHOperatorApp() {
         setCampaignModalOpen(false);
         setActiveReportId(null);
         setClientShareModal(null);
+        setAssignmentSuccess(null);
+        setRejectionModal(null);
       }
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [metricModalId, locationAssetId, assetModalOpen, campaignModalOpen, activeReportId, clientShareModal]);
+  }, [metricModalId, locationAssetId, assetModalOpen, campaignModalOpen, activeReportId, clientShareModal, assignmentSuccess, rejectionModal]);
 
   const selectedAsset = data.assets.find(asset => asset.id === selectedAssetId) ?? data.assets[0];
   const locationAsset = locationAssetId ? data.assets.find(asset => asset.id === locationAssetId) ?? null : null;
@@ -5365,6 +6030,11 @@ export function OOHOperatorApp() {
     ...data.assignments.map(assignment => assignment.team),
     ...data.assets.map(asset => assetAttributeValue(asset, 'Install owner') ?? ''),
   ].map(team => team.trim()).filter(Boolean))), [data.assignments, data.assets]);
+  const reviewerOptions = useMemo(() => Array.from(new Set([
+    ...defaultReviewerOptions,
+    ...data.assignments.map(assignment => assignment.reviewer),
+    ...data.submissions.map(submission => submission.reviewer),
+  ].map(reviewer => reviewer.trim()).filter(Boolean))), [data.assignments, data.submissions]);
   const filteredAssets = useMemo(() => data.assets.filter(asset => {
     const matchesMarket = marketFilter === allMarketsLabel || asset.market === marketFilter;
     const haystack = `${asset.id} ${asset.name} ${asset.format} ${asset.route} ${asset.client} ${asset.campaign}`.toLowerCase();
@@ -5373,7 +6043,17 @@ export function OOHOperatorApp() {
   const mapAssets = filteredAssets.length ? filteredAssets : data.assets;
   const clientBookingRows = useMemo(() => buildClientBookingRows(data.assets, data.clientPages), [data.assets, data.clientPages]);
   const activeReportPreview = useMemo(() => activeReportId ? buildOOHReportPreview(data, activeReportId) : null, [activeReportId, data]);
+  const rejectionSubmission = useMemo(() => rejectionModal ? data.submissions.find(submission => submission.id === rejectionModal.submissionId) ?? null : null, [data.submissions, rejectionModal]);
   const metricsUpdatedAt = useMemo(() => new Date().toISOString(), [data]);
+  const activeSurveyAssignments = useMemo(() => data.assignments.filter(assignment => !isSurveyAssignmentExpired(assignment)), [data.assignments]);
+  const expiredSurveyAssignments = useMemo(() => data.assignments.filter(isSurveyAssignmentExpired), [data.assignments]);
+  const visibleSurveyAssignments = surveyControlTab === 'Expired' ? expiredSurveyAssignments : activeSurveyAssignments;
+  const previewSurveyAsset = data.assets.find(asset => asset.id === assignmentForm.assetId) ?? selectedAsset;
+  const previewSurveyRules = { qrScan: true, gpsRequired: true, photoRequired: true, signatureRequired: true };
+  const previewSurveyLink = activeSurveyAssignments.find(assignment => assignment.assetIds.includes(assignmentForm.assetId))?.id
+    ? `/ooh/field/${activeSurveyAssignments.find(assignment => assignment.assetIds.includes(assignmentForm.assetId))?.id}`
+    : '/ooh/surveys';
+  const previewSurveyQuestions = useMemo(() => buildSurveyQuestionsForScope(assignmentForm.scope), [assignmentForm.scope]);
 
   const pendingSubmissions = data.submissions.filter(submission => submission.status === 'Pending Review');
   const actionBlockers = data.assets.filter(assetNeedsAction).length;
@@ -5797,30 +6477,95 @@ export function OOHOperatorApp() {
   const handleCreateAssignment = () => {
     const asset = data.assets.find(item => item.id === assignmentForm.assetId) ?? selectedAsset;
     if (!asset) return;
-    void runMutation(() => createOOHAssignment({
+    const assignmentId = `ASG-OOH-${Date.now().toString().slice(-6)}`;
+    const scope = [...assignmentForm.scope];
+    const questions = previewSurveyQuestions;
+    const surveyLink = `/ooh/field/${assignmentId}`;
+    const resultsLink = `/ooh/evidence?assignment=${encodeURIComponent(assignmentId)}`;
+    const dueDate = new Date(assignmentForm.dueDate).toISOString();
+    const assignment: OOHBootstrap['assignments'][number] = {
+      id: assignmentId,
       name: assignmentForm.name,
       assetIds: [asset.id],
-      scope: assignmentForm.scope,
+      scope,
       team: assignmentForm.team,
       vendor: assignmentForm.vendor,
       recurrence: assignmentForm.recurrence,
-      dueDate: new Date(assignmentForm.dueDate).toISOString(),
+      dueDate,
       reviewer: assignmentForm.reviewer,
       status: 'Active',
       progress: 0,
       accessRules: { qrScan: true, gpsRequired: true, photoRequired: true, signatureRequired: true },
-      questions: oohSurveyQuestions,
+      questions,
+    };
+    saveLocalOOHAssignment(assignment);
+    setData(current => ({
+      ...current,
+      assignments: [assignment, ...current.assignments.filter(item => item.id !== assignment.id)],
+      assets: current.assets.map(item => item.id === asset.id ? { ...item, status: 'Survey Due', nextSurveyDue: dueDate } : item),
     }));
+    setSurveyControlTab('Active');
+    setAssignmentSuccess({
+      id: assignmentId,
+      name: assignmentForm.name,
+      assetName: asset.name,
+      team: assignmentForm.team,
+      reviewer: assignmentForm.reviewer,
+      scope,
+      surveyLink,
+      resultsLink,
+      notifyOnSubmission: false,
+    });
+    void runMutation(() => createOOHAssignment(assignment));
     setActiveTab('Surveys');
   };
 
-  const handleReview = (submission: OOHSubmission, status: OOHReviewStatus) => {
+  const handleReview = (submission: OOHSubmission, status: OOHReviewStatus, reviewerNotes?: string) => {
+    const nextReviewerNotes = reviewerNotes ?? (status === 'Approved' ? 'Approved for client evidence page.' : 'Returned to field team for corrected proof.');
+    const nextClientPublishStatus = status === 'Approved' ? 'Published' : 'Blocked';
+    setData(current => ({
+      ...current,
+      submissions: current.submissions.map(item => item.id === submission.id ? {
+        ...item,
+        status,
+        reviewerNotes: nextReviewerNotes,
+        clientPublishStatus: nextClientPublishStatus,
+      } : item),
+      assets: current.assets.map(asset => asset.id === submission.assetId ? {
+        ...asset,
+        evidenceStatus: status === 'Approved' ? 'Ready' : 'Rejected',
+        healthScore: status === 'Approved' ? Math.max(asset.healthScore, submission.score) : Math.min(asset.healthScore, submission.score),
+      } : asset),
+    }));
     void runMutation(() => reviewOOHSubmission(submission.id, {
       status,
       reviewer: submission.reviewer,
-      reviewerNotes: status === 'Approved' ? 'Approved for client evidence page.' : 'Returned to field team for corrected proof.',
-      clientPublishStatus: status === 'Approved' ? 'Published' : 'Blocked',
+      reviewerNotes: nextReviewerNotes,
+      clientPublishStatus: nextClientPublishStatus,
     }));
+  };
+
+  const openRejectionModal = (submission: OOHSubmission) => {
+    setRejectionModal({
+      submissionId: submission.id,
+      reason: submission.issues[0] ?? '',
+    });
+  };
+
+  const applyRejectionReason = (reason: string) => {
+    setRejectionModal(current => {
+      if (!current) return current;
+      const nextReason = current.reason.trim()
+        ? `${current.reason.trim()}\n${reason}`
+        : reason;
+      return { ...current, reason: nextReason };
+    });
+  };
+
+  const submitRejection = () => {
+    if (!rejectionSubmission || !rejectionModal?.reason.trim()) return;
+    handleReview(rejectionSubmission, 'Rejected', `Rejected for rework: ${rejectionModal.reason.trim()}`);
+    setRejectionModal(null);
   };
 
   const handleCreateClientPage = () => {
@@ -6150,6 +6895,7 @@ export function OOHOperatorApp() {
               submissions={data.submissions}
               selectedAssetId={selectedAssetId}
               onSelectAsset={setSelectedAssetId}
+              onOpenAssetDetails={openAssetInRegister}
               onOpenGIS={() => setActiveTab('GIS')}
               onOpenAssets={() => setActiveTab('Assets')}
               onOpenSurveys={() => setActiveTab('Surveys')}
@@ -6214,7 +6960,7 @@ export function OOHOperatorApp() {
                         {submission.issues.length > 0 && <p className="mt-2 text-xs text-amber-100">{submission.issues.join(', ')}</p>}
                         <div className="mt-3 flex gap-2">
                           <button className="rounded-lg bg-emerald-400/12 px-3 py-2 text-xs font-bold text-emerald-100" onClick={() => handleReview(submission, 'Approved')}>Approve</button>
-                          <button className="rounded-lg bg-red-400/12 px-3 py-2 text-xs font-bold text-red-100" onClick={() => handleReview(submission, 'Rejected')}>Reject</button>
+                          <button className="rounded-lg bg-red-400/12 px-3 py-2 text-xs font-bold text-red-100" onClick={() => openRejectionModal(submission)}>Reject</button>
                         </div>
                       </div>
                     );
@@ -6371,7 +7117,7 @@ export function OOHOperatorApp() {
                 </div>
               </div>
 
-              <OOHMap assets={mapAssets} submissions={data.submissions} selectedAssetId={selectedAssetId} onSelect={setSelectedAssetId} heightClass="h-[58vh] min-h-[520px] max-h-[680px]" />
+              <OOHMap assets={mapAssets} submissions={data.submissions} selectedAssetId={selectedAssetId} onSelect={setSelectedAssetId} onOpenAssetDetails={openAssetInRegister} heightClass="h-[58vh] min-h-[520px] max-h-[680px]" />
 
               <div className="mt-4 grid gap-3 lg:grid-cols-[1.2fr_0.8fr]">
                 <div className="grid gap-2 md:grid-cols-3">
@@ -6462,11 +7208,11 @@ export function OOHOperatorApp() {
                 </div>
                 <label className="block text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Survey name<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assignmentForm.name} onChange={event => setAssignmentForm({ ...assignmentForm, name: event.target.value })} /></label>
                 <div className="grid gap-3 md:grid-cols-2">
-                  <label className="block text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Team<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assignmentForm.team} onChange={event => setAssignmentForm({ ...assignmentForm, team: event.target.value })} /></label>
+                  <TeamSelectWithNew label="Team" value={assignmentForm.team} options={installationTeamOptions} heightClass="h-10" onChange={team => setAssignmentForm({ ...assignmentForm, team })} />
                   <label className="block text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Vendor<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assignmentForm.vendor} onChange={event => setAssignmentForm({ ...assignmentForm, vendor: event.target.value })} /></label>
                   <label className="block text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Recurrence<select className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assignmentForm.recurrence} onChange={event => setAssignmentForm({ ...assignmentForm, recurrence: event.target.value as AssignmentForm['recurrence'] })}>{recurrenceOptions.map(option => <option key={option} value={option}>{option}</option>)}</select></label>
                   <label className="block text-xs font-bold uppercase tracking-wide text-[#7A94B4]">Due date<input type="date" className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assignmentForm.dueDate} onChange={event => setAssignmentForm({ ...assignmentForm, dueDate: event.target.value })} /></label>
-                  <label className="block text-xs font-bold uppercase tracking-wide text-[#7A94B4] md:col-span-2">Reviewer<input className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#07111F] px-3 text-sm normal-case tracking-normal text-white outline-none" value={assignmentForm.reviewer} onChange={event => setAssignmentForm({ ...assignmentForm, reviewer: event.target.value })} /></label>
+                  <ReviewerSelectWithNew value={assignmentForm.reviewer} options={reviewerOptions} onChange={reviewer => setAssignmentForm({ ...assignmentForm, reviewer })} />
                 </div>
                 <button className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#E11D2E] px-4 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-55" onClick={handleCreateAssignment} disabled={busy || assignmentForm.scope.length === 0}>
                   <ClipboardCheck size={16} /> Create Mobile Assignment
@@ -6475,44 +7221,116 @@ export function OOHOperatorApp() {
             </div>
 
             <div className="rounded-lg border border-white/10 bg-[#0B172A] p-4">
-              <h2 className="text-xl font-black text-white">Survey Campaign Control</h2>
-              <div className="mt-4 grid gap-3">
-                {data.assignments.map(assignment => {
-                  const assignmentAssets = data.assets.filter(asset => assignment.assetIds.includes(asset.id));
-                  const link = `/ooh/field/${assignment.id}`;
+              <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <h2 className="text-xl font-black text-white">Survey Campaign Control</h2>
+                  <p className="mt-1 text-sm leading-6 text-[#9DB4D0]">Switch between active survey work, expired assignments, and the field capture preview.</p>
+                </div>
+                <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">{`${data.assignments.length} surveys`}</Pill>
+              </div>
+
+              <div className="mt-4 grid grid-cols-3 gap-2 rounded-lg border border-white/10 bg-[#07111F] p-1.5">
+                {surveyControlTabs.map(tab => {
+                  const count = tab === 'Preview' ? 1 : tab === 'Active' ? activeSurveyAssignments.length : expiredSurveyAssignments.length;
                   return (
-                    <div key={assignment.id} className="rounded-lg border border-white/10 bg-[#07111F] p-4">
-                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                        <div>
-                          <p className="text-xs font-black uppercase tracking-wide text-[#7A94B4]">{assignment.id}</p>
-                          <h3 className="mt-1 text-lg font-black text-white">{assignment.name}</h3>
-                          <p className="mt-1 text-sm text-[#9DB4D0]">{assignment.team} - {assignment.vendor} - due {formatDate(assignment.dueDate)}</p>
-                        </div>
-                        <Pill>{assignment.status}</Pill>
-                      </div>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {assignmentAssets.map(asset => <Pill key={asset.id}>{asset.id}</Pill>)}
-                        {(assignment.scope ?? []).map(scope => <Pill key={scope} tone="border-[#2E7FFF]/30 bg-[#2E7FFF]/12 text-[#D8E9FF]">{scope}</Pill>)}
-                        <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">{assignment.recurrence}</Pill>
-                        {assignment.accessRules.qrScan && <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">QR required</Pill>}
-                        {assignment.accessRules.gpsRequired && <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">GPS lock</Pill>}
-                        {assignment.accessRules.photoRequired && <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">Photo proof</Pill>}
-                      </div>
-                      <div className="mt-4 h-2 overflow-hidden rounded-full bg-[#112040]">
-                        <div className="h-full rounded-full bg-[#2E7FFF]" style={{ width: `${assignment.progress}%` }} />
-                      </div>
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        <a className="inline-flex items-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-xs font-bold text-white" href={link}>
-                          <QrCode size={14} /> Open Mobile Capture
-                        </a>
-                        <button className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold text-white" onClick={() => void copyLink(link)}>
-                          <Copy size={14} /> {copyNotice?.path === link ? (copyNotice.copied ? 'Copied' : 'Copy blocked') : 'Copy Link'}
-                        </button>
-                      </div>
-                    </div>
+                    <button
+                      key={tab}
+                      type="button"
+                      className={`rounded-md px-3 py-2 text-sm font-black transition ${surveyControlTab === tab ? 'bg-[#2E7FFF] text-white' : 'text-[#9DB4D0] hover:bg-white/5 hover:text-white'}`}
+                      onClick={() => setSurveyControlTab(tab)}
+                    >
+                      {tab} <span className="ml-1 text-xs opacity-75">{count}</span>
+                    </button>
                   );
                 })}
               </div>
+
+              {surveyControlTab === 'Preview' ? (
+                <div className="mt-4 rounded-lg border border-[#2E7FFF]/35 bg-[#07111F] p-4">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-wide text-[#7A94B4]">Survey preview</p>
+                      <h3 className="mt-1 text-lg font-black text-white">{assignmentForm.name || 'Untitled field survey'}</h3>
+                      <p className="mt-1 text-sm text-[#9DB4D0]">{assignmentForm.team} - {assignmentForm.vendor} - due {formatDate(assignmentForm.dueDate)}</p>
+                    </div>
+                    <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">Draft preview</Pill>
+                  </div>
+                  <div className="mt-4 grid gap-3 md:grid-cols-3">
+                    {[
+                      ['Asset', previewSurveyAsset ? `${previewSurveyAsset.name} - ${previewSurveyAsset.market}` : 'No asset selected'],
+                      ['Scope', assignmentForm.scope.length ? assignmentForm.scope.join(', ') : 'No scope selected'],
+                      ['Evidence Rules', `${previewSurveyRules.qrScan ? 'QR, ' : ''}${previewSurveyRules.gpsRequired ? 'GPS, ' : ''}${previewSurveyRules.photoRequired ? 'Photos, ' : ''}${previewSurveyRules.signatureRequired ? 'Signature' : 'No signature'}`.replace(/, $/, '')],
+                    ].map(([label, value]) => (
+                      <div key={label} className="rounded-lg border border-white/10 bg-[#0B172A] p-3">
+                        <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{label}</p>
+                        <p className="mt-1 text-sm font-black leading-5 text-white">{value}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-4 rounded-lg border border-white/10 bg-[#0B172A] p-3">
+                    <p className="text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">Checklist questions</p>
+                    <div className="mt-3 grid gap-2">
+                      {previewSurveyQuestions.map(question => (
+                        <div key={question.id} className="flex items-center justify-between gap-3 rounded-md border border-white/10 bg-[#07111F] px-3 py-2">
+                          <span className="text-sm font-bold text-white">{question.label}</span>
+                          <span className="shrink-0 text-[10px] font-black uppercase tracking-wide text-[#7A94B4]">{question.type.replace('_', ' ')}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <a className="inline-flex items-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-xs font-bold text-white" href={previewSurveyLink}>
+                      <QrCode size={14} /> View Survey
+                    </a>
+                    <button className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold text-white" onClick={() => void copyLink(previewSurveyLink)}>
+                      <Copy size={14} /> {copyNotice?.path === previewSurveyLink ? (copyNotice.copied ? 'Copied' : 'Copy blocked') : 'Share Survey'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-4 grid gap-3">
+                  {visibleSurveyAssignments.map(assignment => {
+                    const assignmentAssets = data.assets.filter(asset => assignment.assetIds.includes(asset.id));
+                    const link = `/ooh/field/${assignment.id}`;
+                    return (
+                      <div key={assignment.id} className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                          <div>
+                            <p className="text-xs font-black uppercase tracking-wide text-[#7A94B4]">{assignment.id}</p>
+                            <h3 className="mt-1 text-lg font-black text-white">{assignment.name}</h3>
+                            <p className="mt-1 text-sm text-[#9DB4D0]">{assignment.team} - {assignment.vendor} - due {formatDate(assignment.dueDate)}</p>
+                          </div>
+                          <Pill tone={isSurveyAssignmentExpired(assignment) ? 'border-red-400/25 bg-red-400/10 text-red-200' : undefined}>{assignment.status}</Pill>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {assignmentAssets.map(asset => <Pill key={asset.id}>{asset.id}</Pill>)}
+                          {(assignment.scope ?? []).map(scope => <Pill key={scope} tone="border-[#2E7FFF]/30 bg-[#2E7FFF]/12 text-[#D8E9FF]">{scope}</Pill>)}
+                          <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">{assignment.recurrence}</Pill>
+                          {assignment.accessRules.qrScan && <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">QR required</Pill>}
+                          {assignment.accessRules.gpsRequired && <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">GPS lock</Pill>}
+                          {assignment.accessRules.photoRequired && <Pill tone="border-blue-300/20 bg-blue-300/10 text-blue-100">Photo proof</Pill>}
+                        </div>
+                        <div className="mt-4 h-2 overflow-hidden rounded-full bg-[#112040]">
+                          <div className="h-full rounded-full bg-[#2E7FFF]" style={{ width: `${assignment.progress}%` }} />
+                        </div>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <a className="inline-flex items-center gap-2 rounded-lg bg-[#2E7FFF] px-3 py-2 text-xs font-bold text-white" href={link}>
+                            <QrCode size={14} /> View Survey
+                          </a>
+                          <button className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold text-white" onClick={() => void copyLink(link)}>
+                            <Copy size={14} /> {copyNotice?.path === link ? (copyNotice.copied ? 'Copied' : 'Copy blocked') : 'Share Survey'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {visibleSurveyAssignments.length === 0 && (
+                    <div className="rounded-lg border border-dashed border-white/15 bg-[#07111F] p-6 text-center text-sm text-[#9DB4D0]">
+                      No {surveyControlTab.toLowerCase()} surveys found.
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </section>
         )}
@@ -6587,7 +7405,7 @@ export function OOHOperatorApp() {
                             {submission.reviewerNotes && <p className="mt-3 rounded-lg border border-blue-300/20 bg-blue-300/10 p-3 text-sm text-blue-100">{submission.reviewerNotes}</p>}
                             <div className="mt-4 flex flex-wrap gap-2">
                               <button className="rounded-lg bg-emerald-400/12 px-3 py-2 text-sm font-bold text-emerald-100 hover:bg-emerald-400/18" onClick={() => handleReview(submission, 'Approved')}>Approve Evidence</button>
-                              <button className="rounded-lg bg-red-400/12 px-3 py-2 text-sm font-bold text-red-100 hover:bg-red-400/18" onClick={() => handleReview(submission, 'Rejected')}>Reject and Rework</button>
+                              <button className="rounded-lg bg-red-400/12 px-3 py-2 text-sm font-bold text-red-100 hover:bg-red-400/18" onClick={() => openRejectionModal(submission)}>Reject and Rework</button>
                             </div>
                           </div>
                           {submission.evidence.length > 1 && (
@@ -7270,6 +8088,194 @@ export function OOHOperatorApp() {
             </div>
           </div>
         )}
+      {rejectionModal && rejectionSubmission && (() => {
+        const asset = data.assets.find(item => item.id === rejectionSubmission.assetId);
+        return (
+          <div className="fixed inset-0 z-[3140] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" role="presentation" onClick={() => setRejectionModal(null)}>
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="reject-evidence-title"
+              className="w-full max-w-2xl overflow-hidden rounded-lg border border-red-300/25 bg-[#081426] shadow-2xl shadow-black/50"
+              onClick={event => event.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4 border-b border-white/10 bg-[#0B172A] p-5">
+                <div>
+                  <p className="text-[11px] font-black uppercase tracking-[0.22em] text-red-200">Reviewer decision</p>
+                  <h2 id="reject-evidence-title" className="mt-1 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Reject evidence for rework</h2>
+                  <p className="mt-2 max-w-xl text-sm leading-6 text-[#9DB4D0]">
+                    Explain what the field team must correct before this proof can be approved or published to a client page.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Close rejection reason"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-[#B8C7DB] hover:bg-white/10 hover:text-white"
+                  onClick={() => setRejectionModal(null)}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="space-y-4 p-5">
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-lg border border-white/10 bg-[#07111F] p-4 sm:col-span-2">
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#7A94B4]">Submission</p>
+                    <h3 className="mt-2 text-lg font-black text-white">{asset?.name ?? rejectionSubmission.assetId}</h3>
+                    <p className="mt-1 text-sm leading-6 text-[#9DB4D0]">{rejectionSubmission.submittedBy} - {formatDateTime(rejectionSubmission.submittedAt)}</p>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#7A94B4]">Score</p>
+                    <p className={`mt-2 text-3xl font-black ${scoreTone(rejectionSubmission.score)}`}>{rejectionSubmission.score}</p>
+                    <p className="mt-1 text-xs text-[#9DB4D0]">{rejectionSubmission.evidence.length} evidence files</p>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+                  <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#7A94B4]">Common rejection reasons</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {rejectionReasonOptions.map(reason => (
+                      <button
+                        key={reason}
+                        type="button"
+                        className="rounded-full border border-red-200/20 bg-red-400/10 px-3 py-1.5 text-xs font-bold text-red-100 hover:bg-red-400/18"
+                        onClick={() => applyRejectionReason(reason)}
+                      >
+                        {reason}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <label className="block text-xs font-bold uppercase tracking-wide text-[#7A94B4]">
+                  Rejection reason
+                  <textarea
+                    className="mt-1 min-h-[130px] w-full rounded-lg border border-white/10 bg-[#07111F] px-3 py-3 text-sm normal-case tracking-normal text-white outline-none focus:border-red-200/40"
+                    placeholder="Example: Close-up photo is missing and the installed creative cannot be verified against the booking. Please recapture wide, close-up and angle proof with QR/GPS lock."
+                    value={rejectionModal.reason}
+                    onChange={event => setRejectionModal(current => current ? { ...current, reason: event.target.value } : current)}
+                  />
+                </label>
+
+                <div className="rounded-lg border border-amber-200/20 bg-amber-300/10 p-3 text-sm leading-6 text-amber-100">
+                  This reason will be saved as the reviewer note, the client publish state will remain blocked, and the evidence will return to the rework queue.
+                </div>
+
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    className="inline-flex min-h-11 items-center justify-center rounded-lg border border-white/10 bg-white/5 px-5 py-2 text-sm font-bold text-white hover:bg-white/10"
+                    onClick={() => setRejectionModal(null)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="inline-flex min-h-11 items-center justify-center rounded-lg bg-[#E11D2E] px-5 py-2 text-sm font-black text-white hover:bg-[#ff3445] disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={submitRejection}
+                    disabled={!rejectionModal.reason.trim()}
+                  >
+                    Confirm Rejection
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+      {assignmentSuccess && (
+        <div className="fixed inset-0 z-[3150] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" role="presentation" onClick={() => setAssignmentSuccess(null)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="assignment-success-title"
+            className="w-full max-w-2xl overflow-hidden rounded-lg border border-emerald-300/25 bg-[#081426] shadow-2xl shadow-black/50"
+            onClick={event => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 bg-[#0B172A] p-5">
+              <div className="flex gap-4">
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-emerald-300/25 bg-emerald-300/10 text-emerald-100">
+                  <CheckCircle2 size={24} />
+                </span>
+                <div>
+                  <p className="text-[11px] font-black uppercase tracking-[0.22em] text-emerald-200">Assignment created</p>
+                  <h2 id="assignment-success-title" className="mt-1 text-2xl font-black text-white" style={{ fontFamily: 'Space Grotesk, sans-serif' }}>Mobile survey is ready</h2>
+                  <p className="mt-2 max-w-xl text-sm leading-6 text-[#9DB4D0]">
+                    Field teams can now open the survey, capture the required evidence, and submit results back to the operator review queue.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                aria-label="Close assignment confirmation"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-[#B8C7DB] hover:bg-white/10 hover:text-white"
+                onClick={() => setAssignmentSuccess(null)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+                  <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#7A94B4]">Survey assignment</p>
+                  <h3 className="mt-2 text-lg font-black text-white">{assignmentSuccess.name}</h3>
+                  <p className="mt-1 text-sm leading-6 text-[#9DB4D0]">{assignmentSuccess.id}</p>
+                </div>
+                <div className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+                  <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#7A94B4]">Asset and owner</p>
+                  <h3 className="mt-2 text-lg font-black text-white">{assignmentSuccess.assetName}</h3>
+                  <p className="mt-1 text-sm leading-6 text-[#9DB4D0]">{assignmentSuccess.team} - reviewer {assignmentSuccess.reviewer}</p>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-white/10 bg-[#07111F] p-4">
+                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-[#7A94B4]">Inspection scope</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {assignmentSuccess.scope.map(scope => (
+                    <Pill key={scope} tone="border-blue-300/20 bg-blue-300/10 text-blue-100">{scope}</Pill>
+                  ))}
+                </div>
+              </div>
+
+              <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-[#2E7FFF]/25 bg-[#0E213B] p-4 text-left">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 accent-[#2E7FFF]"
+                  checked={assignmentSuccess.notifyOnSubmission}
+                  onChange={event => setAssignmentSuccess(current => current ? { ...current, notifyOnSubmission: event.target.checked } : current)}
+                />
+                <span>
+                  <span className="block text-sm font-black text-white">Notify me for every submitted survey result</span>
+                  <span className="mt-1 block text-xs leading-5 text-[#9DB4D0]">Use this when the reviewer wants an alert each time the field team submits evidence for this assignment.</span>
+                </span>
+              </label>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <a
+                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg bg-[#2E7FFF] px-4 py-3 text-sm font-black text-white hover:bg-[#4B91FF]"
+                  href={assignmentSuccess.surveyLink}
+                >
+                  <QrCode size={16} /> View Survey
+                </a>
+                <a
+                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm font-black text-white hover:bg-white/10"
+                  href={assignmentSuccess.resultsLink}
+                >
+                  <Eye size={16} /> Open Results Page
+                </a>
+                <button
+                  type="button"
+                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm font-black text-white hover:bg-white/10"
+                  onClick={() => void copyLink(assignmentSuccess.surveyLink)}
+                >
+                  <Copy size={16} /> {copyNotice?.path === assignmentSuccess.surveyLink ? (copyNotice.copied ? 'Link Copied' : 'Copy Blocked') : 'Share Survey'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {clientShareModal && (() => {
         const path = `/ooh/client/${clientShareModal.page.token}`;
         const messageNoticePath = `message:${clientShareModal.page.token}`;
